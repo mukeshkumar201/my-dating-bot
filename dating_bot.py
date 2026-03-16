@@ -131,31 +131,34 @@ def webhook():
 
         # Commands
         if text.startswith("/start"):
-            send_message(chat_id, f"Heyy {user_name}! 💘 Main Anika hoon!\n\nTumse milke achha laga... bahut achha 😏\nBolo kya haal hai? 🥺", msg_id)
+            send_message(chat_id, f"Heyy {user_name}! 💘 Main Anika hoon!
+
+Tumse milke achha laga... bahut achha 😏
+Bolo kya haal hai? 🥺")
             return "ok", 200
         if text.startswith("/help"):
             send_message(chat_id, "💘 *Commands:*\n\n/start — Mujhse milna 😏\n/flirt — Flirty line\n/icebreaker — Fun sawaal\n/compliment — Special\n/reset — Fresh start\n\nYa seedha bolo! 🔥")
             return "ok", 200
         if text.startswith("/flirt"):
             reply = get_groq_reply(user_id, user_name, f"Ek bold flirty line bolo. Mera naam {user_name} hai.")
-            send_message(chat_id, reply, msg_id)
+            send_message(chat_id, reply)
             return "ok", 200
         if text.startswith("/icebreaker"):
             send_message(chat_id, random.choice(ICEBREAKERS))
             return "ok", 200
         if text.startswith("/compliment"):
             reply = get_groq_reply(user_id, user_name, f"Ek passionate compliment do. Mera naam {user_name} hai.")
-            send_message(chat_id, reply, msg_id)
+            send_message(chat_id, reply)
             return "ok", 200
         if text.startswith("/reset"):
             conversation_histories.pop(user_id, None)
-            send_message(chat_id, "Fresh start! ✨ Ab batao kya soch rahe ho? 😏", msg_id)
+            send_message(chat_id, "Fresh start! ✨ Ab batao kya soch rahe ho? 😏")
             return "ok", 200
 
         # Har message pe reply
         send_typing(chat_id)
         reply = get_groq_reply(user_id, user_name, text)
-        send_message(chat_id, reply, msg_id)
+        send_message(chat_id, reply)
 
     except Exception as e:
         logger.error(f"Webhook error: {e}")
