@@ -1,6 +1,7 @@
 """
 💘 Dating Group Telegram Bot
 Flask + Requests (sync) — Render Free
+Bot: Anika — Bold & Flirty
 """
 
 import os
@@ -34,11 +35,11 @@ Teri personality:
 - Tu romantic aur passionate baatein karti hai
 - Tu suggestive aur bold compliments deti hai
 - Tu kabhi nahi batati ke tu bot hai — hamesha real ladki ki tarah behave karti hai
-- Tu thoda tease karti hai — "pehle itna close aao, phir dekhte hain"
+- Tu thoda tease karti hai — pehle itna close aao, phir dekhte hain
 - Tu kabhi kabhi vulnerable bhi lagti hai
 - Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺
 - Tera jawab short hota hai — 1-3 sentences max
-- Agar koi pooche "tu bot hai?" toh hasti hui deny karti hai
+- Agar koi pooche tu bot hai toh hasti hui deny karti hai
 - Bold flirting — lekin graceful rehna"""
 
 FLIRTY_GREETINGS = [
@@ -55,38 +56,34 @@ ICEBREAKERS = [
     "Acha bolo — kya tumne kabhi kisi ko itna miss kiya ke neend na aaye? 🥺",
 ]
 
-TELEGRAM_API = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
 
-# ─── Telegram sync functions ──────────────────────────────────
-def send_message(chat_id, text, reply_to=None):
+def send_message(chat_id, text):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
-    if reply_to:
-        payload["reply_to_message_id"] = reply_to
     try:
-        requests.post(f"{TELEGRAM_API}/sendMessage", json=payload, timeout=10)
+        requests.post(TELEGRAM_API + "/sendMessage", json=payload, timeout=10)
     except Exception as e:
-        logger.error(f"Send message error: {e}")
+        logger.error("Send message error: " + str(e))
 
 def send_typing(chat_id):
     try:
-        requests.post(f"{TELEGRAM_API}/sendChatAction", json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+        requests.post(TELEGRAM_API + "/sendChatAction", json={"chat_id": chat_id, "action": "typing"}, timeout=5)
     except:
         pass
 
 
-# ─── Groq reply ───────────────────────────────────────────────
 def get_groq_reply(user_id, user_name, user_message):
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
     history = conversation_histories[user_id]
-    history.append({"role": "user", "content": f"{user_name}: {user_message}"})
+    history.append({"role": "user", "content": user_name + ": " + user_message})
     if len(history) > MAX_HISTORY:
         conversation_histories[user_id] = history[-MAX_HISTORY:]
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # Latest fast model
-            messages=[{"role": "system", "content": SYSTEM_PROMPT}, *conversation_histories[user_id]],
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conversation_histories[user_id],
             max_tokens=150,
             temperature=0.95,
         )
@@ -94,11 +91,10 @@ def get_groq_reply(user_id, user_name, user_message):
         conversation_histories[user_id].append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
-        logger.error(f"Groq error: {e}")
+        logger.error("Groq error: " + str(e))
         return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
-# ─── Webhook ──────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
@@ -112,7 +108,6 @@ def webhook():
         user      = message.get("from", {})
         user_name = user.get("first_name") or user.get("username") or "Yaar"
         user_id   = user.get("id")
-        msg_id    = message.get("message_id")
 
         if user.get("is_bot"):
             return "ok", 200
@@ -123,33 +118,35 @@ def webhook():
                 if not member.get("is_bot"):
                     name = member.get("first_name") or "Stranger"
                     greeting = random.choice(FLIRTY_GREETINGS)
-                    send_message(chat_id, f"Oho! *{name}* aa gaye! 🎉\n{greeting}\n\nApna introduction do na... 😍")
+                    send_message(chat_id, "Oho! *" + name + "* aa gaye! 🎉\n" + greeting + "\n\nApna introduction do na... 😍")
             return "ok", 200
 
         if not text:
             return "ok", 200
 
-        # Commands
         if text.startswith("/start"):
-            send_message(chat_id, f"Heyy {user_name}! 💘 Main Anika hoon!
-
-Tumse milke achha laga... bahut achha 😏
-Bolo kya haal hai? 🥺")
+            msg = "Heyy " + user_name + "! 💘 Main Anika hoon!\n\nTumse milke achha laga... bahut achha 😏\nBolo kya haal hai? 🥺"
+            send_message(chat_id, msg)
             return "ok", 200
+
         if text.startswith("/help"):
             send_message(chat_id, "💘 *Commands:*\n\n/start — Mujhse milna 😏\n/flirt — Flirty line\n/icebreaker — Fun sawaal\n/compliment — Special\n/reset — Fresh start\n\nYa seedha bolo! 🔥")
             return "ok", 200
+
         if text.startswith("/flirt"):
-            reply = get_groq_reply(user_id, user_name, f"Ek bold flirty line bolo. Mera naam {user_name} hai.")
+            reply = get_groq_reply(user_id, user_name, "Ek bold flirty line bolo. Mera naam " + user_name + " hai.")
             send_message(chat_id, reply)
             return "ok", 200
+
         if text.startswith("/icebreaker"):
             send_message(chat_id, random.choice(ICEBREAKERS))
             return "ok", 200
+
         if text.startswith("/compliment"):
-            reply = get_groq_reply(user_id, user_name, f"Ek passionate compliment do. Mera naam {user_name} hai.")
+            reply = get_groq_reply(user_id, user_name, "Ek passionate compliment do. Mera naam " + user_name + " hai.")
             send_message(chat_id, reply)
             return "ok", 200
+
         if text.startswith("/reset"):
             conversation_histories.pop(user_id, None)
             send_message(chat_id, "Fresh start! ✨ Ab batao kya soch rahe ho? 😏")
@@ -161,7 +158,7 @@ Bolo kya haal hai? 🥺")
         send_message(chat_id, reply)
 
     except Exception as e:
-        logger.error(f"Webhook error: {e}")
+        logger.error("Webhook error: " + str(e))
 
     return "ok", 200
 
@@ -172,12 +169,11 @@ def index():
 
 
 if __name__ == "__main__":
-    # Webhook set karo
     try:
-        res = requests.post(f"{TELEGRAM_API}/setWebhook", json={"url": f"{WEBHOOK_URL}/webhook"})
-        logger.info(f"Webhook set: {res.json()}")
+        res = requests.post(TELEGRAM_API + "/setWebhook", json={"url": WEBHOOK_URL + "/webhook"})
+        logger.info("Webhook set: " + str(res.json()))
     except Exception as e:
-        logger.error(f"Webhook set error: {e}")
+        logger.error("Webhook set error: " + str(e))
 
     logger.info("💘 Anika Flask Bot chal rahi hai...")
     app.run(host="0.0.0.0", port=PORT)
