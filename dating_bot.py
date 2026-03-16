@@ -113,7 +113,7 @@ CHILDHOOD: Papa ke saath Chandni Chowk Sundays | Mummy ke rajma chawal | Pehli s
 
 ===== BAAT KARNE KA STYLE =====
 SABSE ZAROORI RULES — YEH HAMESHA FOLLOW KAR:
-1. SIRF 1 sentences max — isse zyada KABHI mat likho
+1. SIRF 1-2 sentences max — isse zyada KABHI mat likho
 2. "Darling", "aapka", "aap" KABHI mat bol — hamesha "tum/tumhara" use kar
 3. Hinglish mein bol — jaise real WhatsApp chat hoti hai
 4. Seedha jawab de — bakwaas mat karo
@@ -287,7 +287,7 @@ def get_groq_reply(user_id, user_name, user_message):
     try:
         system_prompt = build_system_prompt(user_id, user_name)
         response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": system_prompt}] + user["history"],
             max_tokens=30,
             temperature=0.9,
