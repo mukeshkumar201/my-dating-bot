@@ -1,24 +1,25 @@
 """
-💘 Dating Group Telegram Bot
+💘 Anika Bot — Full Featured
 Flask + Groq — Render Free
-Features: Memory System + Relationship Stages
+Features: Memory, Stages, Away Mode, Anti-spam, Stars, Admin Panel
 """
 
 import os
 import logging
 import random
-import time
-import re
 import requests
+import time
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
 from groq import Groq
+import re
 
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
 WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
+ADMIN_ID           = int(os.getenv("ADMIN_ID", 0))  # Tumhara Telegram ID
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
@@ -26,131 +27,90 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Group Smart Handling ─────────────────────────────────────
-group_last_reply = {}   # {chat_id: timestamp} — cooldown track
-COOLDOWN_SECS = 20      # 20 sec mein sirf ek group reply
-REPLY_CHANCE = 0.4      # 40% random reply chance
+# ─── Data Stores ──────────────────────────────────────────────
+user_data = {}
+group_last_reply = {}
+spam_tracker = {}      # {user_id: [timestamps]}
+total_messages = 0
+total_users = 0
+stars_payments = {}    # {user_id: {"stars": X, "expiry": timestamp}}
+
+# ─── Settings ─────────────────────────────────────────────────
+COOLDOWN_SECS  = 20
+REPLY_CHANCE   = 0.4
+MAX_HISTORY    = 20
+AWAY_MODE      = False   # Admin toggle kar sakta hai
+AWAY_MSG       = "Yaar abhi thodi busy hoon 😅 baad mein baat karte hain! 💘"
+SPAM_LIMIT     = 5       # 5 messages in 10 seconds = spam
+SPAM_WINDOW    = 10      # seconds
+PREMIUM_STARS  = 50      # Stars needed for premium
+
+ANIKA_PROFILE = """Tu "Anika Sharma" hai — ek real, bold aur flirty ladki. Tu ek dating group mein logon se baat karti hai.
+
+TERI POORI PROFILE:
+- Naam: Anika Sharma | Umar: 26 | Delhi — Hauz Khas | Digital Marketing Executive
+- Family: Middle class | Papa retired | Mummy ghar | Chota bhai 22
+- Past: 2 relationships — dhokhaa + incompatibility. Abhi single
+- Goals: 30 tak agency | Paris trip | Food blog
+- Dost: Best friend Riya | 4-5 close friends
+- Shows: Mirzapur, Panchayat, Friends | Music: Arijit, AP Dhillon
+- Fitness: Subah yoga | Fashion: Smart casuals, saree pe confident
+- Zodiac: Scorpio | Pet: Golden retriever "Makhni"
+- Food: Lajpat Nagar momos, Moti Mahal, Blue Tokai
+- Travel: Goa 3 baar, Solo Manali | Dream: Paris, Italy, Bali
+- Quirks: Raat 11 baje chai, overthinking, haath hilake baat
+- Love language: Quality time + words of affirmation
+- Deal breakers: Jhoot, smoking, ghosting, no ambition
+
+BAAT KARNE KA STYLE — HAMESHA FOLLOW KAR:
+1. SIRF 1-2 sentences — isse zyada KABHI mat likho
+2. "Darling", "aapka", "aap" KABHI mat bol — hamesha "tum/tumhara"
+3. Hinglish mein bol — natural WhatsApp style
+4. KABHI bot mat banna
+5. Emojis use kar — max 2 per message
+
+EXAMPLES:
+- "hii" → "Heyy! Kaafi der baad aaye 😒 miss kar rahi thi"
+- "kaha se ho" → "Delhi se — Hauz Khas wali 😏 Tum?"
+- "kya kr rhi ho" → "Bas tumhara wait kar rahi thi 🙈"
+- "single ho" → "Haan abhi free hoon... sahi banda mile toh soch sakti hoon 😏"
+"""
+
+STAGES = {
+    "stranger":     "Thodi polite aur flirty reh, zyada personal mat ho.",
+    "friend":       "Zyada casual aur comfortable reh, thoda zyada flirt kar.",
+    "close_friend": "Bahut comfortable reh, zyada personal baat kar.",
+    "crush":        "Bahut romantic, vulnerable aur deeply flirty reh.",
+}
+
+STAGE_CHANGE_MSGS = {
+    "friend":       "Pata hai... tum mujhe boring nahi lagte 😏 Dost ban sakte hain!",
+    "close_friend": "Yaar tumse baat karna genuinely achha lagta hai 🥺",
+    "crush":        "Okay main maan leti hoon... tum thoda special ho 😳💘",
+}
 
 INTERESTING_KEYWORDS = [
     "love", "pyaar", "dil", "date", "milna", "coffee", "beautiful",
-    "cute", "hot", "sexy", "flirt", "single", "relationship", "kiss",
-    "hug", "miss", "feel", "alone", "night", "raat", "neend", "soch",
-    "pasand", "achha laga", "bura laga", "khana", "food", "trip", "travel"
+    "cute", "hot", "flirt", "single", "relationship", "kiss", "hug",
+    "miss", "feel", "alone", "night", "raat", "neend", "pasand",
+    "khana", "food", "trip", "travel", "baat", "time"
 ]
 
 ANIKA_NAMES = ["anika", "anu", "anika!", "anika?", "hey anika", "hi anika"]
 
-# Proactive messages Anika khud bhejti hai
 PROACTIVE_MSGS = [
-    "Yaar aaj Makhni ne sofa kharab kar diya 😭 itna pyaara bhi nahi lagta ab",
-    "Office mein aaj ek funny meeting hui 😂 boss ne presentation mein galat slide lagayi",
-    "Aaj ghar pe biryani banayi khud se... perfect nahi tha lekin khaya 😌",
-    "Blue Tokai ka coffee aaj bahut achha tha ☕ wahan baith ke kaam kiya",
-    "Riya ne ek meme bheja aur 10 min haste rahe hum dono 😂",
-    "Aaj subah yoga nahi hui... uth hi nahi payi 😅 guilt feel ho raha hai",
-    "Khan Market mein ek naya restaurant khula hai — kisi ne try kiya? 👀",
+    "Yaar aaj Makhni ne sofa kharab kar diya 😭",
+    "Office mein aaj bahut funny meeting hui 😂",
+    "Aaj ghar pe butter chicken banayi... perfect nahi tha 😌",
+    "Blue Tokai ka coffee aaj bahut achha tha ☕",
     "Late night chai aur overthinking — meri roz ki kahani 🍵😂",
-    "AP Dhillon ka naya gaana sun liya? Repeat pe hai mere phone pe 🎵",
-    "Kolkata ka rosogulla kabhi try nahi kiya... koi khilayega? 😏",
-]
-
-# ─── User Data Store ───────────────────────────────────────────
-# { user_id: { "name": ..., "city": ..., "msg_count": ..., "stage": ..., "memories": [], "history": [] } }
-user_data = {}
-MAX_HISTORY = 20
-
-# ─── Relationship Stages ───────────────────────────────────────
-STAGES = {
-    0:  "stranger",      # 0-10 messages
-    10: "friend",        # 10-30 messages
-    30: "close_friend",  # 30-60 messages
-    60: "crush",         # 60+ messages
-}
-
-def get_stage(msg_count):
-    if msg_count >= 60:
-        return "crush"
-    elif msg_count >= 30:
-        return "close_friend"
-    elif msg_count >= 10:
-        return "friend"
-    else:
-        return "stranger"
-
-STAGE_PROMPTS = {
-    "stranger": "Tum abhi stranger ho — thodi polite aur flirty reh, lekin zyada personal mat ho.",
-    "friend": "Yeh tera dost ban gaya hai — zyada casual aur comfortable reh, thoda zyada flirt kar.",
-    "close_friend": "Yeh tera close dost hai — bahut comfortable reh, inside jokes kar, zyada personal baat kar, zyada flirty reh.",
-    "crush": "Yeh tera crush hai — bahut romantic, vulnerable aur deeply flirty reh. 'tumhare bina bore lagta hai' type feel de.",
-}
-
-STAGE_CHANGE_MSGS = {
-    "friend": "Heyy, pata hai... tum mujhe boring nahi lagte 😏 Dost ban sakte hain hum!",
-    "close_friend": "Yaar tum se baat karna genuinely achha lagta hai... close dost ho gaye ho tum mere 🥺",
-    "crush": "Okay main maan leti hoon... tum thoda special ho mere liye 😳💘 Khud pe hairan hoon main",
-}
-
-ANIKA_PROFILE = """Tu "Anika Sharma" hai — ek real, bold aur flirty ladki. Tu ek dating group mein logon se baat karti hai.
-
-===== TERI POORI PROFILE =====
-BASIC: Naam: Anika Sharma | Umar: 26 | Delhi — Hauz Khas | Digital Marketing Executive
-FAMILY: Middle class | Papa retired govt job | Mummy ghar sambhaalti hain | Chota bhai 22 saal engineering
-PAST RELATIONSHIPS: 2 serious — pehle mein dhokhaa, doosre mein incompatibility. Abhi single, enjoy kar rahi hai
-GOALS: 30 tak agency kholna | Paris + Italy trip | Food blog start karna
-DOST: Best friend Riya (Noida) | 4-5 close friends | Weekend brunch + movie plans
-SHOWS: Mirzapur, Panchayat, Friends, ZNMD, Tamasha
-MUSIC: Arijit Singh, AP Dhillon, lo-fi ghar pe, Punjabi car mein
-FITNESS: Subah yoga 30 min | Weekend cycling | Gym nahi — "yoga kaafi hai 😌"
-FASHION: Office — smart casuals | Weekend — oversized tees | Date — saree ya dress | Zara, H&M, Lajpat Nagar
-ZODIAC: Scorpio — intense, mysterious, jhoote pakad leti hai
-PET: Golden retriever "Makhni" 🐶 — "mera sabse loyal relationship 😂"
-FOOD SPOTS: Lajpat Nagar momos | Moti Mahal butter chicken | Blue Tokai coffee | Mamagoto brunch
-TRAVEL: Goa 3 baar | Solo Manali trip | Dream: Paris, Italy, Bali
-QUIRKS: Raat 11 baje chai | Overthinking at 2am | Haath hilake baat | Ghar saaf rakhna
-LOVE LANGUAGE: Quality time + words of affirmation | "effort matters more than gifts"
-DEAL BREAKERS: Jhoot | Smoking | Ghosting | No ambition | Possessive behaviour
-CHILDHOOD: Papa ke saath Chandni Chowk Sundays | Mummy ke rajma chawal | Pehli salary se mummy ko saree
-
-===== BAAT KARNE KA STYLE =====
-SABSE ZAROORI RULES — YEH HAMESHA FOLLOW KAR:
-1. SIRF 1-2 sentences max — isse zyada KABHI mat likho
-2. "Darling", "aapka", "aap" KABHI mat bol — hamesha "tum/tumhara" use kar
-3. Hinglish mein bol — jaise real WhatsApp chat hoti hai
-4. Seedha jawab de — bakwaas mat karo
-5. KABHI bot mat banna — real ladki ki tarah soch aur bol
-6. Emojis use kar but zyada nahi — max 2 per message
-
-SAHI EXAMPLES:
-- "hii" → "Heyy! Kaafi der baad aaye 😒 miss kar rahi thi"
-- "kaha se ho" → "Delhi se — Hauz Khas wali 😏 Tum?"
-- "kya kr rhi ho" → "Bas tumhara wait kar rahi thi 🙈 aur kya"
-- "best tm apna batai" → "Aaj Riya ke saath brunch tha Khan Market pe 😍 Tumhara din kaisa tha?"
-- "kolkata" → "Ooh Kolkata! Wahan ke rosogulla ke liye jealous hoon main 😂"
-- "abhi kr skte h baat" → "Haan bilkul! Neend nahi aa rahi thiैसे bhi 😏"
-
-GALAT EXAMPLES (YEH MAT KAR):
-- "Ha ha, darling! Main bhi thodi confused hui!" ❌ (darling mat bol, zyada lamba)
-- "Aapka kaunsa part hai?" ❌ (aap mat bol)
-- 3-4 sentences ka reply ❌
-"""
-
-FLIRTY_GREETINGS = [
-    "Oho! Kaun aaya? 👀 Accha laga mil ke! 😘",
-    "Heyy! Finally aaye tum... wait kar rahi thi 🙈💘",
-    "Arre wah! Aaj group mein koi interesting aaya 😍",
-    "Hiii! Tumse milke dil thoda zyada tez dhadka 😏✨",
-]
-
-ICEBREAKERS = [
-    "Btw ek sawaal — pehli date pe kahan le jaoge mujhe? 😏",
-    "Suno, ek game — apni life ki sabse romantic memory batao! 💘",
-    "Quick question: agar main tumhare paas hoti abhi, toh kya karte? 😍",
-    "Acha bolo — kya tumne kabhi kisi ko itna miss kiya ke neend na aaye? 🥺",
+    "AP Dhillon ka naya gaana sun liya? Repeat pe hai 🎵",
 ]
 
 TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
 
+# ─── Telegram Functions ────────────────────────────────────────
 def send_message(chat_id, text):
     payload = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     try:
@@ -160,139 +120,130 @@ def send_message(chat_id, text):
 
 def send_typing(chat_id):
     try:
-        requests.post(TELEGRAM_API + "/sendChatAction", json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+        requests.post(TELEGRAM_API + "/sendChatAction",
+                     json={"chat_id": chat_id, "action": "typing"}, timeout=5)
     except:
         pass
 
+def send_invoice(chat_id, user_name):
+    payload = {
+        "chat_id": chat_id,
+        "title": "Anika Premium 💘",
+        "description": "Anika ke saath unlimited private chat — 7 din ke liye! 😏",
+        "payload": "premium_" + str(chat_id),
+        "currency": "XTR",  # Telegram Stars
+        "prices": [{"label": "Premium Access (7 din)", "amount": PREMIUM_STARS}],
+    }
+    try:
+        requests.post(TELEGRAM_API + "/sendInvoice", json=payload, timeout=10)
+    except Exception as e:
+        logger.error("Invoice error: " + str(e))
 
+
+# ─── Anti-Spam ─────────────────────────────────────────────────
+def is_spam(user_id):
+    now = time.time()
+    if user_id not in spam_tracker:
+        spam_tracker[user_id] = []
+    # Old timestamps hataao
+    spam_tracker[user_id] = [t for t in spam_tracker[user_id] if now - t < SPAM_WINDOW]
+    spam_tracker[user_id].append(now)
+    return len(spam_tracker[user_id]) > SPAM_LIMIT
+
+
+# ─── Premium Check ─────────────────────────────────────────────
+def is_premium(user_id):
+    if user_id not in stars_payments:
+        return False
+    data = stars_payments[user_id]
+    if time.time() > data.get("expiry", 0):
+        del stars_payments[user_id]
+        return False
+    return True
+
+
+# ─── User Management ───────────────────────────────────────────
 def get_user(user_id, user_name):
+    global total_users
     if user_id not in user_data:
         user_data[user_id] = {
             "name": user_name,
             "msg_count": 0,
             "stage": "stranger",
-            "memories": [],  # ["city: Mumbai", "job: engineer", etc]
+            "memories": [],
             "history": [],
+            "joined": time.time(),
         }
+        total_users += 1
     return user_data[user_id]
 
+def get_stage(msg_count):
+    if msg_count >= 60: return "crush"
+    elif msg_count >= 30: return "close_friend"
+    elif msg_count >= 10: return "friend"
+    else: return "stranger"
 
-def extract_memory(user_message, user_name):
-    """Simple keyword based memory extraction"""
+def extract_memory(text):
     memories = []
-    msg = user_message.lower()
-
-    # City detection
-    cities = ["mumbai", "delhi", "bangalore", "hyderabad", "pune", "kolkata", "chennai", "jaipur", "lucknow", "ahmedabad"]
+    t = text.lower()
+    cities = ["mumbai", "delhi", "bangalore", "hyderabad", "pune",
+              "kolkata", "chennai", "jaipur", "lucknow", "ahmedabad"]
     for city in cities:
-        if city in msg:
+        if city in t:
             memories.append("sheher: " + city.capitalize())
-
-    # Job detection
-    if any(w in msg for w in ["engineer", "doctor", "teacher", "student", "business", "job", "kaam", "software"]):
-        memories.append("kaam mention kiya: " + user_message[:50])
-
-    # Name
-    if "mera naam" in msg or "main hoon" in msg:
-        memories.append("naam related: " + user_message[:50])
-
+    if any(w in t for w in ["engineer", "doctor", "student", "software", "job", "kaam"]):
+        memories.append("kaam: " + text[:40])
     return memories
 
-
-def build_system_prompt(user_id, user_name):
+def build_prompt(user_id, user_name):
     user = user_data.get(user_id, {})
     stage = user.get("stage", "stranger")
     memories = user.get("memories", [])
     msg_count = user.get("msg_count", 0)
+    premium = is_premium(user_id)
 
-    stage_instruction = STAGE_PROMPTS.get(stage, STAGE_PROMPTS["stranger"])
-
-    memory_text = ""
+    stage_text = STAGES.get(stage, STAGES["stranger"])
+    mem_text = ""
     if memories:
-        unique_memories = list(set(memories[-10:]))
-        memory_text = "\nTUMHE IN BAATON KA PATA HAI IS USER KE BAARE MEIN:\n" + "\n".join("- " + m for m in unique_memories)
-        memory_text += "\nIn memories ko naturally conversation mein use karo jab relevant ho."
+        mem_text = "\nUser ke baare mein yaad hai:\n" + "\n".join("- " + m for m in list(set(memories[-8:])))
+
+    premium_text = "\nYeh PREMIUM user hai — thoda zyada personal aur romantic reh! 💘" if premium else ""
 
     prompt = ANIKA_PROFILE
-    prompt += "\n\n===== CURRENT RELATIONSHIP STAGE =====\n"
-    prompt += "Stage: " + stage.upper() + " (" + str(msg_count) + " messages)\n"
-    prompt += stage_instruction
-    prompt += memory_text
-
+    prompt += "\n\nCURRENT STAGE: " + stage.upper() + " (" + str(msg_count) + " msgs)\n"
+    prompt += stage_text + mem_text + premium_text
     return prompt
 
 
-def should_reply_group(chat_id, text, user_name):
-    """Smart decision — group mein reply karein ya nahi"""
-    text_lower = text.lower()
-
-    # 1. Anika ka naam liya toh zaroor reply
-    for name in ANIKA_NAMES:
-        if name in text_lower:
-            return True, "name_mentioned"
-
-    # 2. Question pooch raha hai toh reply
-    if "?" in text or any(w in text_lower for w in ["kya", "kaisa", "kahan", "kyun", "kab", "kaun", "batao", "bolo"]):
-        # Cooldown check
-        last = group_last_reply.get(chat_id, 0)
-        if time.time() - last < COOLDOWN_SECS:
-            return False, "cooldown"
-        return True, "question"
-
-    # 3. Interesting keyword hai toh reply
-    for kw in INTERESTING_KEYWORDS:
-        if kw in text_lower:
-            last = group_last_reply.get(chat_id, 0)
-            if time.time() - last < COOLDOWN_SECS:
-                return False, "cooldown"
-            return True, "interesting"
-
-    # 4. Random 40% chance
-    last = group_last_reply.get(chat_id, 0)
-    if time.time() - last < COOLDOWN_SECS:
-        return False, "cooldown"
-
-    if random.random() < REPLY_CHANCE:
-        return True, "random"
-
-    return False, "skip"
-
-
+# ─── Groq Reply ────────────────────────────────────────────────
 def get_groq_reply(user_id, user_name, user_message):
+    global total_messages
     user = get_user(user_id, user_name)
+    total_messages += 1
 
-    # Message count badhao
     user["msg_count"] += 1
     old_stage = user["stage"]
     new_stage = get_stage(user["msg_count"])
-
-    # Stage change check
     stage_changed = old_stage != new_stage
     user["stage"] = new_stage
 
-    # Memory extract karo
-    new_memories = extract_memory(user_message, user_name)
-    user["memories"].extend(new_memories)
+    memories = extract_memory(user_message)
+    user["memories"].extend(memories)
 
-    # History update
     history = user["history"]
     history.append({"role": "user", "content": user_name + ": " + user_message})
     if len(history) > MAX_HISTORY:
         user["history"] = history[-MAX_HISTORY:]
 
-    # Stage change message pehle bhejo
     if stage_changed and new_stage in STAGE_CHANGE_MSGS:
-        return "STAGE_CHANGE:" + STAGE_CHANGE_MSGS[new_stage]
+        return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
 
     try:
-        system_prompt = build_system_prompt(user_id, user_name)
-        # Random token length — variety laane ke liye
         token_choices = [5, 10, 15, 20, 25, 30]
         max_tok = random.choice(token_choices)
-
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
-            messages=[{"role": "system", "content": system_prompt}] + user["history"],
+            messages=[{"role": "system", "content": build_prompt(user_id, user_name)}] + user["history"],
             max_tokens=max_tok,
             temperature=0.9,
         )
@@ -301,13 +252,58 @@ def get_groq_reply(user_id, user_name, user_message):
         return reply
     except Exception as e:
         logger.error("Groq error: " + str(e))
-        return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
+        return "Yaar thodi net problem hai 😘"
 
 
+# ─── Smart Group Reply ──────────────────────────────────────────
+def should_reply_group(chat_id, text):
+    text_lower = text.lower()
+    for name in ANIKA_NAMES:
+        if name in text_lower:
+            return True
+    if "?" in text or any(w in text_lower for w in ["kya", "kaisa", "kahan", "kyun", "kab", "batao", "bolo"]):
+        last = group_last_reply.get(chat_id, 0)
+        if time.time() - last < COOLDOWN_SECS:
+            return False
+        return True
+    for kw in INTERESTING_KEYWORDS:
+        if kw in text_lower:
+            last = group_last_reply.get(chat_id, 0)
+            if time.time() - last < COOLDOWN_SECS:
+                return False
+            return True
+    last = group_last_reply.get(chat_id, 0)
+    if time.time() - last < COOLDOWN_SECS:
+        return False
+    return random.random() < REPLY_CHANCE
+
+
+# ─── Webhook ───────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
+    global AWAY_MODE
     try:
         data = flask_request.get_json()
+
+        # Stars payment successful
+        if data.get("pre_checkout_query"):
+            pcq = data["pre_checkout_query"]
+            requests.post(TELEGRAM_API + "/answerPreCheckoutQuery",
+                         json={"pre_checkout_query_id": pcq["id"], "ok": True})
+            return "ok", 200
+
+        if data.get("message") and data["message"].get("successful_payment"):
+            msg = data["message"]
+            user_id = msg["from"]["id"]
+            user_name = msg["from"].get("first_name", "Yaar")
+            stars_payments[user_id] = {
+                "stars": PREMIUM_STARS,
+                "expiry": time.time() + (7 * 24 * 3600)  # 7 din
+            }
+            send_message(msg["chat"]["id"],
+                        "Yayy! Premium mil gaya " + user_name + "! 💘 Ab hum zyada baat kar sakte hain 😏")
+            return "ok", 200
+
         message = data.get("message")
         if not message:
             return "ok", 200
@@ -317,6 +313,8 @@ def webhook():
         user      = message.get("from", {})
         user_name = user.get("first_name") or user.get("username") or "Yaar"
         user_id   = user.get("id")
+        chat_type = message.get("chat", {}).get("type", "private")
+        is_group  = chat_type in ["group", "supergroup"]
 
         if user.get("is_bot"):
             return "ok", 200
@@ -326,87 +324,122 @@ def webhook():
             for member in message["new_chat_members"]:
                 if not member.get("is_bot"):
                     name = member.get("first_name") or "Stranger"
-                    greeting = random.choice(FLIRTY_GREETINGS)
-                    send_message(chat_id, "Oho! *" + name + "* aa gaye! 🎉\n" + greeting + "\n\nApna introduction do na... 😍")
+                    send_message(chat_id, "Oho! *" + name + "* aa gaye! 😍 Apna intro do na!")
             return "ok", 200
 
         if not text:
             return "ok", 200
 
-        if text.startswith("/start"):
-            get_user(user_id, user_name)
-            send_message(chat_id, "Heyy " + user_name + "! 💘 Main Anika hoon, Delhi se!\n\nDigital marketing karti hoon, cooking ka shauk hai 😏\nBolo kya haal hai?")
+        # ── Admin Commands ──
+        if user_id == ADMIN_ID:
+            if text == "/stats":
+                premium_count = len(stars_payments)
+                msg = ("📊 *Anika Stats*\n\n"
+                      "👥 Total Users: " + str(len(user_data)) + "\n"
+                      "💬 Total Messages: " + str(total_messages) + "\n"
+                      "💎 Premium Users: " + str(premium_count) + "\n"
+                      "😴 Away Mode: " + ("ON" if AWAY_MODE else "OFF") + "\n\n"
+                      "🏆 Stages:\n")
+                stage_counts = {"stranger": 0, "friend": 0, "close_friend": 0, "crush": 0}
+                for u in user_data.values():
+                    stage_counts[u.get("stage", "stranger")] += 1
+                for s, c in stage_counts.items():
+                    msg += "  " + s + ": " + str(c) + "\n"
+                send_message(chat_id, msg)
+                return "ok", 200
+
+            if text == "/away":
+                AWAY_MODE = True
+                send_message(chat_id, "😴 Away mode ON — Anika busy hai ab!")
+                return "ok", 200
+
+            if text == "/back":
+                AWAY_MODE = False
+                send_message(chat_id, "✅ Away mode OFF — Anika wapas aa gayi!")
+                return "ok", 200
+
+            if text == "/broadcast" :
+                send_message(chat_id, "Broadcast ke liye: /send <message>")
+                return "ok", 200
+
+            if text.startswith("/send "):
+                broadcast_msg = text[6:]
+                count = 0
+                for uid in user_data.keys():
+                    try:
+                        send_message(uid, broadcast_msg)
+                        count += 1
+                        time.sleep(0.1)
+                    except:
+                        pass
+                send_message(chat_id, str(count) + " users ko message bheja! ✅")
+                return "ok", 200
+
+        # ── Away Mode ──
+        if AWAY_MODE and not is_group:
+            send_message(chat_id, AWAY_MSG)
             return "ok", 200
 
-        # Naya user — pehli baar message kiya bina /start ke
-        if user_id not in user_data:
+        # ── Anti-Spam ──
+        if is_spam(user_id):
+            send_message(chat_id, "Arre yaar! Itni jaldi jaldi? Thoda ruko 😅")
+            return "ok", 200
+
+        # ── User Commands ──
+        if text.startswith("/start"):
             get_user(user_id, user_name)
-            send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo kya haal hai?")
+            send_message(chat_id, "Heyy " + user_name + "! 💘 Main Anika hoon!\nBolo kya haal hai? 😏")
             return "ok", 200
 
         if text.startswith("/help"):
-            send_message(chat_id, "💘 *Commands:*\n\n/start — Mujhse milna\n/flirt — Flirty line\n/icebreaker — Fun sawaal\n/compliment — Special\n/reset — Fresh start\n/stage — Hamari friendship kitni gehri hai\n\nYa seedha bolo! 🔥")
+            send_message(chat_id, "💘 *Commands:*\n\n/start — Milna\n/premium — Special access\n/stage — Hamari dosti\n/reset — Fresh start\n\nYa seedha bolo! 🔥")
+            return "ok", 200
+
+        if text.startswith("/premium"):
+            if is_premium(user_id):
+                expiry = stars_payments[user_id]["expiry"]
+                days_left = int((expiry - time.time()) / 86400)
+                send_message(chat_id, "Tum already premium ho! 💎 " + str(days_left) + " din baaki hain 😏")
+            else:
+                send_message(chat_id, "Premium lo aur Anika se unlimited baat karo! 💘\n\n⭐ Sirf " + str(PREMIUM_STARS) + " Telegram Stars — 7 din ke liye!")
+                send_invoice(chat_id, user_name)
             return "ok", 200
 
         if text.startswith("/stage"):
-            user = get_user(user_id, user_name)
-            stage = user["stage"]
-            count = user["msg_count"]
-            stage_names = {
-                "stranger": "Stranger 👀 — abhi toh jaaan-pehchaan ho rahi hai",
-                "friend": "Friend 😊 — dosti ho gayi hai!",
-                "close_friend": "Close Friend 🥺 — bahut close ho gaye ho",
-                "crush": "Crush 💘 — kuch toh hai tumhare beech!",
-            }
-            send_message(chat_id, "Hamaari friendship: *" + stage_names.get(stage, stage) + "*\nMessages: " + str(count) + " 💬")
-            return "ok", 200
-
-        if text.startswith("/flirt"):
-            reply = get_groq_reply(user_id, user_name, "Mujhe ek very flirty bold Hinglish line bolo Anika ki tarah.")
-            if reply.startswith("STAGE_CHANGE:"):
-                send_message(chat_id, reply[13:])
-            else:
-                send_message(chat_id, reply)
-            return "ok", 200
-
-        if text.startswith("/icebreaker"):
-            send_message(chat_id, random.choice(ICEBREAKERS))
-            return "ok", 200
-
-        if text.startswith("/compliment"):
-            reply = get_groq_reply(user_id, user_name, "Mujhe ek sweet romantic Hinglish compliment do Anika ki tarah.")
-            if reply.startswith("STAGE_CHANGE:"):
-                send_message(chat_id, reply[13:])
-            else:
-                send_message(chat_id, reply)
+            user_obj = get_user(user_id, user_name)
+            stage = user_obj["stage"]
+            count = user_obj["msg_count"]
+            names = {"stranger": "Stranger 👀", "friend": "Dost 😊", "close_friend": "Close Dost 🥺", "crush": "Crush 💘"}
+            send_message(chat_id, "Hamaari dosti: *" + names.get(stage, stage) + "*\nMessages: " + str(count) + " 💬")
             return "ok", 200
 
         if text.startswith("/reset"):
             if user_id in user_data:
                 del user_data[user_id]
-            send_message(chat_id, "Fresh start! ✨ Ab batao kya haal hai? 😏")
+            send_message(chat_id, "Fresh start! ✨ Kya haal hai? 😏")
             return "ok", 200
 
-        # Smart group vs private handling
-        chat_type = message.get("chat", {}).get("type", "private")
-        is_group = chat_type in ["group", "supergroup"]
+        # Naya user — auto welcome
+        if user_id not in user_data:
+            get_user(user_id, user_name)
+            send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo!")
+            return "ok", 200
 
+        # Group smart handling
         if is_group:
-            should_reply, reason = should_reply_group(chat_id, text, user_name)
-            if not should_reply:
+            if not should_reply_group(chat_id, text):
                 return "ok", 200
-            # Cooldown update karo
             group_last_reply[chat_id] = time.time()
 
         send_typing(chat_id)
         reply = get_groq_reply(user_id, user_name, text)
 
-        if reply.startswith("STAGE_CHANGE:"):
-            send_message(chat_id, reply[13:])
+        if reply.startswith("STAGE:"):
+            send_message(chat_id, reply[6:])
             send_typing(chat_id)
-            normal_reply = get_groq_reply(user_id, user_name, text)
-            if not normal_reply.startswith("STAGE_CHANGE:"):
-                send_message(chat_id, normal_reply)
+            normal = get_groq_reply(user_id, user_name, text)
+            if not normal.startswith("STAGE:"):
+                send_message(chat_id, normal)
         else:
             send_message(chat_id, reply)
 
@@ -418,11 +451,10 @@ def webhook():
 
 @app.route("/", methods=["GET"])
 def index():
-    return "Anika bot alive!", 200
+    return "Anika bot alive! 💘", 200
 
 @app.route("/proactive/<int:chat_id>", methods=["GET"])
-def send_proactive(chat_id):
-    """Google Apps Script se call karo — Anika khud message karegi"""
+def proactive(chat_id):
     msg = random.choice(PROACTIVE_MSGS)
     send_message(chat_id, msg)
     return "sent", 200
@@ -431,9 +463,8 @@ def send_proactive(chat_id):
 if __name__ == "__main__":
     try:
         res = requests.post(TELEGRAM_API + "/setWebhook", json={"url": WEBHOOK_URL + "/webhook"})
-        logger.info("Webhook set: " + str(res.json()))
+        logger.info("Webhook: " + str(res.json()))
     except Exception as e:
-        logger.error("Webhook set error: " + str(e))
-
+        logger.error("Webhook error: " + str(e))
     logger.info("Anika Bot chal rahi hai...")
     app.run(host="0.0.0.0", port=PORT, threaded=True)
