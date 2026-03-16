@@ -1,13 +1,16 @@
 """
 💘 Dating Group Telegram Bot with Groq AI
 ==========================================
-Webhook mode — Render Free Web Service ke liye
+Webhook mode + Keep-Alive — Render Free Web Service
 Bot: Anika — Bold & Flirty Ladki
 """
 
 import os
 import logging
 import random
+import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from groq import Groq
 from telegram import Update
@@ -48,7 +51,7 @@ Teri personality:
 - Tu kabhi kabhi vulnerable bhi lagti hai — "pata nahi kyun tumse baat karna achha lagta hai 🥺"
 - Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺 etc
 - Tera jawab short aur punchy hota hai — 1-3 sentences, natural lagni chahiye
-- Tu user ka naam lete waqt thoda possessive sound karti hai — "mere {naam}" style mein
+- Tu user ka naam lete waqt thoda possessive sound karti hai
 - Agar koi pooche "tu bot hai?" toh hasti hui deny karti hai
 
 Yaad rakh:
@@ -72,6 +75,23 @@ ICEBREAKERS = [
 ]
 
 
+# ─── Keep-Alive HTTP Server ────────────────────────────────────────────────────
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Anika bot chal rahi hai! 💘")
+
+    def log_message(self, format, *args):
+        pass  # Quiet logs
+
+def run_keep_alive():
+    server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
+    logger.info(f"Keep-alive server port {PORT} pe chal raha hai")
+    server.serve_forever()
+
+
+# ─── Groq reply ────────────────────────────────────────────────────────────────
 def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
@@ -100,6 +120,7 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
         return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
+# ─── Commands ──────────────────────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "tum"
     await update.message.reply_text(
@@ -150,22 +171,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     if not message or not message.text:
         return
-
     user = update.effective_user
     if user.is_bot:
         return
-
     user_name = user.first_name or user.username or "Yaar"
-
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action="typing"
-    )
-
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     reply = get_groq_reply(user.id, user_name, message.text.strip())
     await message.reply_text(reply)
 
 
+# ─── Main ──────────────────────────────────────────────────────────────────────
 def main():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN set karo!")
@@ -173,6 +188,11 @@ def main():
         raise ValueError("GROQ_API_KEY set karo!")
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL set karo!")
+
+    # Keep-alive server background mein chalao
+    t = threading.Thread(target=run_keep_alive)
+    t.daemon = True
+    t.start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -185,11 +205,12 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("💘 Anika Bot chal rahi hai...")
+    logger.info("💘 Anika Bot webhook mode mein chal rahi hai...")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         webhook_url=f"{WEBHOOK_URL}/webhook",
+        secret_token=None,
     )
 
 
