@@ -80,7 +80,7 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Anika bot chal rahi hai! 💘")
+        self.wfile.write(b"Anika bot alive!")
 
     def log_message(self, format, *args):
         pass  # Quiet logs
