@@ -1,23 +1,17 @@
 """
-💘 Dating Group Telegram Bot with Groq AI
-==========================================
-Pure Webhook mode — Render Free Web Service
-Keep-Alive = Google Apps Script se ping
+💘 Dating Group Telegram Bot
+Flask + Telegram Webhook — Render Free
 """
 
 import os
 import logging
 import random
+from flask import Flask, request
 from dotenv import load_dotenv
 from groq import Groq
+import telegram
 from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    filters,
-    ContextTypes,
-)
+import asyncio
 
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -26,14 +20,13 @@ WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
 
 groq_client = Groq(api_key=GROQ_API_KEY)
+bot = telegram.Bot(token=TELEGRAM_BOT_TOKEN)
+app = Flask(__name__)
 
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-conversation_histories: dict[int, list[dict]] = {}
+conversation_histories = {}
 MAX_HISTORY = 20
 
 SYSTEM_PROMPT = """Tu ek bold, flirty aur passionate ladki hai jiska naam "Anika" hai. Tu ek dating group mein sabse baat karti hai.
@@ -49,8 +42,7 @@ Teri personality:
 - Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺
 - Tera jawab short hota hai — 1-3 sentences max
 - Agar koi pooche "tu bot hai?" toh hasti hui deny karti hai
-- Bold flirting — lekin graceful rehna
-"""
+- Bold flirting — lekin graceful rehna"""
 
 FLIRTY_GREETINGS = [
     "Oho! Kaun aaya? 👀 Accha laga mil ke! 😘",
@@ -67,23 +59,17 @@ ICEBREAKERS = [
 ]
 
 
-def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
+def get_groq_reply(user_id, user_name, user_message):
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
-
     history = conversation_histories[user_id]
     history.append({"role": "user", "content": f"{user_name}: {user_message}"})
-
     if len(history) > MAX_HISTORY:
         conversation_histories[user_id] = history[-MAX_HISTORY:]
-
     try:
         response = groq_client.chat.completions.create(
             model="llama3-8b-8192",
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                *conversation_histories[user_id],
-            ],
+            messages=[{"role": "system", "content": SYSTEM_PROMPT}, *conversation_histories[user_id]],
             max_tokens=150,
             temperature=0.95,
         )
@@ -95,91 +81,81 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
         return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_user.first_name or "tum"
-    await update.message.reply_text(
-        f"Heyy {name}! 💘 Main Anika hoon!\n\nTumse milke achha laga... bahut achha 😏\nBolo kya haal hai? 🥺"
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "💘 Commands:\n\n"
-        "/start — Mujhse milna 😏\n"
-        "/flirt — Flirty line suno\n"
-        "/icebreaker — Fun sawaal\n"
-        "/compliment — Tumhare liye kuch special\n"
-        "/reset — Fresh start\n\n"
-        "Ya seedha kuch bhi bolo — main hamesha hoon! 🔥"
-    )
-
-async def flirt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    name = user.first_name or "tum"
-    reply = get_groq_reply(user.id, name, f"Ek bahut bold aur flirty line bolo. Mera naam {name} hai.")
-    await update.message.reply_text(reply)
-
-async def icebreaker_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(random.choice(ICEBREAKERS))
-
-async def compliment_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    name = user.first_name or "tum"
-    reply = get_groq_reply(user.id, name, f"Ek bahut passionate aur bold compliment do. Mera naam {name} hai.")
-    await update.message.reply_text(reply)
-
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    conversation_histories.pop(update.effective_user.id, None)
-    await update.message.reply_text("Fresh start! ✨ Ab batao... kya soch rahe ho mere baare mein? 😏")
-
-async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.message.new_chat_members:
-        if member.is_bot:
-            continue
-        name = member.first_name or "Stranger"
-        await update.message.reply_text(
-            f"Oho! *{name}* aa gaye! 🎉\n{random.choice(FLIRTY_GREETINGS)}\n\nApna introduction do na... 😍",
-            parse_mode="Markdown",
-        )
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_update(update_data):
+    update = Update.de_json(update_data, bot)
     message = update.message
-    if not message or not message.text:
+    if not message:
         return
-    user = update.effective_user
+
+    chat_id   = message.chat.id
+    text      = (message.text or "").strip()
+    user      = message.from_user
+    user_name = user.first_name or user.username or "Yaar"
+    user_id   = user.id
+    msg_id    = message.message_id
+
     if user.is_bot:
         return
-    user_name = user.first_name or user.username or "Yaar"
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    reply = get_groq_reply(user.id, user_name, message.text.strip())
-    await message.reply_text(reply)
+
+    # New member welcome
+    if message.new_chat_members:
+        for member in message.new_chat_members:
+            if not member.is_bot:
+                name = member.first_name or "Stranger"
+                greeting = random.choice(FLIRTY_GREETINGS)
+                await bot.send_message(chat_id, f"Oho! *{name}* aa gaye! 🎉\n{greeting}\n\nApna introduction do na... 😍", parse_mode="Markdown")
+        return
+
+    if not text:
+        return
+
+    # Commands
+    if text.startswith("/start"):
+        await bot.send_message(chat_id, f"Heyy {user_name}! 💘 Main Anika hoon!\n\nTumse milke achha laga... bahut achha 😏\nBolo kya haal hai? 🥺", reply_to_message_id=msg_id)
+        return
+    if text.startswith("/help"):
+        await bot.send_message(chat_id, "💘 Commands:\n\n/start — Mujhse milna 😏\n/flirt — Flirty line\n/icebreaker — Fun sawaal\n/compliment — Special\n/reset — Fresh start\n\nYa seedha bolo! 🔥")
+        return
+    if text.startswith("/flirt"):
+        reply = get_groq_reply(user_id, user_name, f"Ek bold flirty line bolo. Mera naam {user_name} hai.")
+        await bot.send_message(chat_id, reply, reply_to_message_id=msg_id)
+        return
+    if text.startswith("/icebreaker"):
+        await bot.send_message(chat_id, random.choice(ICEBREAKERS))
+        return
+    if text.startswith("/compliment"):
+        reply = get_groq_reply(user_id, user_name, f"Ek passionate compliment do. Mera naam {user_name} hai.")
+        await bot.send_message(chat_id, reply, reply_to_message_id=msg_id)
+        return
+    if text.startswith("/reset"):
+        conversation_histories.pop(user_id, None)
+        await bot.send_message(chat_id, "Fresh start! ✨ Ab batao kya soch rahe ho? 😏", reply_to_message_id=msg_id)
+        return
+
+    # Har message pe reply
+    await bot.send_chat_action(chat_id, "typing")
+    reply = get_groq_reply(user_id, user_name, text)
+    await bot.send_message(chat_id, reply, reply_to_message_id=msg_id)
 
 
-def main():
-    if not TELEGRAM_BOT_TOKEN:
-        raise ValueError("TELEGRAM_BOT_TOKEN set karo!")
-    if not GROQ_API_KEY:
-        raise ValueError("GROQ_API_KEY set karo!")
-    if not WEBHOOK_URL:
-        raise ValueError("WEBHOOK_URL set karo!")
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    update_data = request.get_json()
+    asyncio.run(process_update(update_data))
+    return "ok", 200
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("flirt", flirt_command))
-    app.add_handler(CommandHandler("icebreaker", icebreaker_command))
-    app.add_handler(CommandHandler("compliment", compliment_command))
-    app.add_handler(CommandHandler("reset", reset_command))
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+@app.route("/", methods=["GET"])
+def index():
+    return "Anika bot alive! 💘", 200
 
-    logger.info("💘 Anika Bot chal rahi hai...")
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_url=f"{WEBHOOK_URL}/webhook",
-    )
+
+def set_webhook():
+    asyncio.run(bot.set_webhook(url=f"{WEBHOOK_URL}/webhook"))
+    logger.info(f"Webhook set: {WEBHOOK_URL}/webhook")
 
 
 if __name__ == "__main__":
-    main()
+    set_webhook()
+    logger.info("💘 Anika Bot Flask server chal rahi hai...")
+    app.run(host="0.0.0.0", port=PORT)
