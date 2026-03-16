@@ -1,15 +1,13 @@
 """
 💘 Dating Group Telegram Bot with Groq AI
 ==========================================
-Webhook mode + Keep-Alive Server
-Render Free Web Service ke liye
+Pure Webhook mode — Render Free Web Service
+Keep-Alive = Google Apps Script se ping
 """
 
 import os
 import logging
 import random
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
 from groq import Groq
 from telegram import Update
@@ -69,25 +67,6 @@ ICEBREAKERS = [
 ]
 
 
-# ─── Keep-Alive HTTP Server ────────────────────────────────────
-class KeepAliveHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Anika bot alive!")
-    def do_HEAD(self):
-        self.send_response(200)
-        self.end_headers()
-    def log_message(self, format, *args):
-        pass
-
-def run_keep_alive():
-    server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
-    logger.info(f"Keep-alive server port {PORT} pe chal raha hai")
-    server.serve_forever()
-
-
-# ─── Groq reply ───────────────────────────────────────────────
 def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
@@ -116,7 +95,6 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
         return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
-# ─── Commands ──────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "tum"
     await update.message.reply_text(
@@ -176,7 +154,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text(reply)
 
 
-# ─── Main ──────────────────────────────────────────────────────
 def main():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN set karo!")
@@ -184,11 +161,6 @@ def main():
         raise ValueError("GROQ_API_KEY set karo!")
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL set karo!")
-
-    # Keep-alive alag thread mein
-    t = threading.Thread(target=run_keep_alive)
-    t.daemon = True
-    t.start()
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
