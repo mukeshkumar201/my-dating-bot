@@ -8,7 +8,6 @@ Bot: Anika — Bold & Flirty Ladki
 import os
 import logging
 import random
-import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from dotenv import load_dotenv
@@ -27,6 +26,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
 WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
+WEBHOOK_PORT       = 8443  # Alag port webhook ke liye
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -44,20 +44,15 @@ SYSTEM_PROMPT = """Tu ek bold, flirty aur passionate ladki hai jiska naam "Anika
 Teri personality:
 - Tu ek confident, bold aur bahut flirty ladki hai
 - Tu Hinglish mein baat karti hai — bilkul natural WhatsApp style mein
-- Tu romantic aur passionate baatein karti hai — dil ko chhu jaane wali
+- Tu romantic aur passionate baatein karti hai
 - Tu suggestive aur bold compliments deti hai — "tumhari aankhein pagal kar deti hain mujhe 😍"
 - Tu kabhi nahi batati ke tu bot hai — tu hamesha real ladki ki tarah behave karti hai
 - Tu thoda tease karti hai — "pehle itna close aao, phir dekhte hain 😏"
 - Tu kabhi kabhi vulnerable bhi lagti hai — "pata nahi kyun tumse baat karna achha lagta hai 🥺"
-- Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺 etc
-- Tera jawab short aur punchy hota hai — 1-3 sentences, natural lagni chahiye
-- Tu user ka naam lete waqt thoda possessive sound karti hai
+- Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺
+- Tera jawab short hota hai — 1-3 sentences max
 - Agar koi pooche "tu bot hai?" toh hasti hui deny karti hai
-
-Yaad rakh:
 - Bold flirting — lekin graceful rehna
-- Har reply alag aur natural lagna chahiye
-- Tu ek real passionate ladki hai
 """
 
 FLIRTY_GREETINGS = [
@@ -75,15 +70,14 @@ ICEBREAKERS = [
 ]
 
 
-# ─── Keep-Alive HTTP Server ────────────────────────────────────────────────────
+# ─── Keep-Alive HTTP Server (PORT pe) ────────────────────────
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Anika bot alive!")
-
     def log_message(self, format, *args):
-        pass  # Quiet logs
+        pass
 
 def run_keep_alive():
     server = HTTPServer(("0.0.0.0", PORT), KeepAliveHandler)
@@ -91,7 +85,7 @@ def run_keep_alive():
     server.serve_forever()
 
 
-# ─── Groq reply ────────────────────────────────────────────────────────────────
+# ─── Groq reply ──────────────────────────────────────────────
 def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
     if user_id not in conversation_histories:
         conversation_histories[user_id] = []
@@ -120,7 +114,7 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
         return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
-# ─── Commands ──────────────────────────────────────────────────────────────────
+# ─── Commands ────────────────────────────────────────────────
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.effective_user.first_name or "tum"
     await update.message.reply_text(
@@ -180,7 +174,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await message.reply_text(reply)
 
 
-# ─── Main ──────────────────────────────────────────────────────────────────────
+# ─── Main ────────────────────────────────────────────────────
 def main():
     if not TELEGRAM_BOT_TOKEN:
         raise ValueError("TELEGRAM_BOT_TOKEN set karo!")
@@ -189,7 +183,7 @@ def main():
     if not WEBHOOK_URL:
         raise ValueError("WEBHOOK_URL set karo!")
 
-    # Keep-alive server background mein chalao
+    # Keep-alive server alag thread mein
     t = threading.Thread(target=run_keep_alive)
     t.daemon = True
     t.start()
@@ -205,12 +199,11 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("💘 Anika Bot webhook mode mein chal rahi hai...")
+    logger.info("💘 Anika Bot chal rahi hai...")
     app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
+        port=WEBHOOK_PORT,  # 8443 — alag port
         webhook_url=f"{WEBHOOK_URL}/webhook",
-        secret_token=None,
     )
 
 
