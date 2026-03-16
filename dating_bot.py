@@ -286,10 +286,14 @@ def get_groq_reply(user_id, user_name, user_message):
 
     try:
         system_prompt = build_system_prompt(user_id, user_name)
+        # Random token length — variety laane ke liye
+        token_choices = [5, 10, 15, 20, 25, 30]
+        max_tok = random.choice(token_choices)
+
         response = groq_client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[{"role": "system", "content": system_prompt}] + user["history"],
-            max_tokens=30,
+            max_tokens=max_tok,
             temperature=0.9,
         )
         reply = response.choices[0].message.content.strip()
