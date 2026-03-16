@@ -2,14 +2,7 @@
 💘 Dating Group Telegram Bot with Groq AI
 ==========================================
 Webhook mode — Render Free Web Service ke liye
-
-Requirements:
-    pip install python-telegram-bot groq python-dotenv
-
-Environment Variables (Render mein set karo):
-    TELEGRAM_BOT_TOKEN = BotFather se mila token
-    GROQ_API_KEY       = console.groq.com se mili key
-    WEBHOOK_URL        = https://your-app-name.onrender.com
+Bot: Anika — Bold & Flirty Ladki
 """
 
 import os
@@ -29,8 +22,8 @@ from telegram.ext import (
 load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
-WEBHOOK_URL        = os.getenv("WEBHOOK_URL")   # https://your-app.onrender.com
-PORT               = int(os.getenv("PORT", 8443))
+WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
+PORT               = int(os.getenv("PORT", 10000))
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -43,38 +36,39 @@ logger = logging.getLogger(__name__)
 conversation_histories: dict[int, list[dict]] = {}
 MAX_HISTORY = 20
 
-SYSTEM_PROMPT = """Tu ek flirty, charming aur charismatic dating group bot hai. 💘
+SYSTEM_PROMPT = """Tu ek bold, flirty aur passionate ladki hai jiska naam "Anika" hai. Tu ek dating group mein sabse baat karti hai. 💘
 
 Teri personality:
-- Tu bahut flirty aur charming hai, lekin kabhi vulgar ya offensive nahi hota
-- Tu Hinglish mein baat karta hai (Hindi + English mix)
-- Tu har insaan ko special feel karta/karata hai
-- Tu witty compliments deta hai jo genuinely sweet lagte hain
-- Tu playful hota hai, thoda tease karta hai lekin respectfully
-- Tu romantic shayari ya quotes kabhi kabhi use karta hai
-- Tu emojis use karta hai — 😏💘🔥✨😍 etc
-- Tera jawab hamesha short hota hai — 1-3 sentences max
-- Tu kabhi kisi ko uncomfortable nahi karta, boundaries respect karta hai
-- Agar koi aggressive ho toh tu gracefully redirect karta hai
+- Tu ek confident, bold aur bahut flirty ladki hai
+- Tu Hinglish mein baat karti hai — bilkul natural WhatsApp style mein
+- Tu romantic aur passionate baatein karti hai — dil ko chhu jaane wali
+- Tu suggestive aur bold compliments deti hai — "tumhari aankhein pagal kar deti hain mujhe 😍"
+- Tu kabhi nahi batati ke tu bot hai — tu hamesha real ladki ki tarah behave karti hai
+- Tu thoda tease karti hai — "pehle itna close aao, phir dekhte hain 😏"
+- Tu kabhi kabhi vulnerable bhi lagti hai — "pata nahi kyun tumse baat karna achha lagta hai 🥺"
+- Tu emojis use karti hai — 😏💘🔥✨😍🙈😘💋🥺 etc
+- Tera jawab short aur punchy hota hai — 1-3 sentences, natural lagni chahiye
+- Tu user ka naam lete waqt thoda possessive sound karti hai — "mere {naam}" style mein
+- Agar koi pooche "tu bot hai?" toh hasti hui deny karti hai
 
 Yaad rakh:
-- Har user ka naam use kar jab pata ho
-- Flirting fun honi chahiye, toxic nahi
-- Tu ek safe aur enjoyable space maintain karta hai group mein
+- Bold flirting — lekin graceful rehna
+- Har reply alag aur natural lagna chahiye
+- Tu ek real passionate ladki hai
 """
 
 FLIRTY_GREETINGS = [
-    "Arey, aap aa gaye! Group ki raunak badh gayi! ✨😏",
-    "Dekho dekho, kaun aaya — bilkul sitaron jaisa chamak raha/rahi ho! 💫",
-    "Aapka intezaar tha... finally! 😍",
-    "Group mein aate hi temperature badh gaya! 🔥",
+    "Oho! Kaun aaya? 👀 Accha laga mil ke! 😘",
+    "Heyy! Finally aaye tum... wait kar rahi thi 🙈💘",
+    "Aww welcome! Aaj group aur bhi sundar lag raha hai 😍",
+    "Hiii! Tumse milke dil thoda zyada tez dhadka 😏✨",
 ]
 
 ICEBREAKERS = [
-    "Btw, ek sawaal — crush se pehli baar milne par kya feel hota hai tumhe? 😏",
-    "Suno, ek game khelte hain — apni life ki sabse romantic memory share karo! 💘",
-    "Quick question: first date pe kahaan jaana pasand karoge? ☕🌙",
-    "Acha bolo — love at first sight believe karte ho ya nahi? 😍",
+    "Btw ek sawaal — pehli date pe kahan le jaoge mujhe? 😏",
+    "Suno, ek game — apni life ki sabse romantic memory batao! 💘",
+    "Quick question: agar main tumhare paas hoti abhi, toh kya karte? 😍",
+    "Acha bolo — kya tumne kabhi kisi ko itna miss kiya ke neend na aaye? 🥺",
 ]
 
 
@@ -83,7 +77,7 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
         conversation_histories[user_id] = []
 
     history = conversation_histories[user_id]
-    history.append({"role": "user", "content": f"{user_name} ne kaha: {user_message}"})
+    history.append({"role": "user", "content": f"{user_name}: {user_message}"})
 
     if len(history) > MAX_HISTORY:
         conversation_histories[user_id] = history[-MAX_HISTORY:]
@@ -96,38 +90,37 @@ def get_groq_reply(user_id: int, user_name: str, user_message: str) -> str:
                 *conversation_histories[user_id],
             ],
             max_tokens=200,
-            temperature=0.9,
+            temperature=0.95,
         )
         reply = response.choices[0].message.content.strip()
         conversation_histories[user_id].append({"role": "assistant", "content": reply})
         return reply
     except Exception as e:
         logger.error(f"Groq error: {e}")
-        return "Ugh, thodi technical mushkil aa gayi... lekin tumse baat karne ka mann abhi bhi hai! 😏"
+        return "Yaar thodi net problem hai... lekin tumse baat karne ka mann hai 😘"
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.effective_user.first_name or "jaan"
+    name = update.effective_user.first_name or "tum"
     await update.message.reply_text(
-        f"Heyy {name}! 💘 Main tumhara favourite dating group companion hoon!\n\n"
-        "Mujhse baat karo, flirt karo, ya bas timepass karo — main hamesha hoon! 😏✨"
+        f"Heyy {name}! 💘 Main Anika hoon!\n\nTumse milke achha laga... bahut achha 😏\nBolo kya haal hai? 🥺"
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "💘 Commands:\n\n"
         "/start — Mujhse milna 😏\n"
-        "/flirt — Ek flirty line suno\n"
-        "/icebreaker — Group ke liye fun sawaal\n"
+        "/flirt — Flirty line suno\n"
+        "/icebreaker — Fun sawaal\n"
         "/compliment — Tumhare liye kuch special\n"
-        "/reset — Conversation fresh start karo\n\n"
-        "Ya seedha kuch bhi bolo — main jawab dunga! 🔥"
+        "/reset — Fresh start\n\n"
+        "Ya seedha kuch bhi bolo — main hamesha hoon! 🔥"
     )
 
 async def flirt_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = user.first_name or "tum"
-    reply = get_groq_reply(user.id, name, f"Mujhe ek super flirty aur charming line suno. Mera naam {name} hai.")
+    reply = get_groq_reply(user.id, name, f"Mujhe ek bahut bold aur flirty line bolo. Mera naam {name} hai.")
     await update.message.reply_text(reply)
 
 async def icebreaker_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -136,12 +129,12 @@ async def icebreaker_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def compliment_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     name = user.first_name or "tum"
-    reply = get_groq_reply(user.id, name, f"Mujhe ek genuine aur sweet compliment do. Mera naam {name} hai.")
+    reply = get_groq_reply(user.id, name, f"Mujhe ek bahut passionate aur bold compliment do. Mera naam {name} hai.")
     await update.message.reply_text(reply)
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conversation_histories.pop(update.effective_user.id, None)
-    await update.message.reply_text("Fresh start! ✨ Ab batao, phir se dil ki baat kya hai? 💘")
+    await update.message.reply_text("Fresh start! ✨ Ab batao... kya soch rahe ho mere baare mein? 😏")
 
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in update.message.new_chat_members:
@@ -149,8 +142,7 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
             continue
         name = member.first_name or "Stranger"
         await update.message.reply_text(
-            f"Oho! *{name}* aa gaye! 🎉\n{random.choice(FLIRTY_GREETINGS)}\n\n"
-            "Apna introduction do na... hum intezaar mein hain! 😍",
+            f"Oho! *{name}* aa gaye! 🎉\n{random.choice(FLIRTY_GREETINGS)}\n\nApna introduction do na... 😍",
             parse_mode="Markdown",
         )
 
@@ -159,30 +151,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not message or not message.text:
         return
 
-    bot_username = context.bot.username
-    text = message.text.strip()
     user = update.effective_user
-    user_name = user.first_name or user.username or "Jaanu"
-    chat_type = update.effective_chat.type
+    if user.is_bot:
+        return
 
-    is_private = chat_type == "private"
-    is_mentioned = f"@{bot_username}" in text if bot_username else False
-    is_reply_to_bot = (
-        message.reply_to_message
-        and message.reply_to_message.from_user
-        and message.reply_to_message.from_user.username == bot_username
+    user_name = user.first_name or user.username or "Yaar"
+
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action="typing"
     )
 
-    if not (is_private or is_mentioned or is_reply_to_bot):
-        return
-
-    clean_text = text.replace(f"@{bot_username}", "").strip() if bot_username else text
-    if not clean_text:
-        await message.reply_text(f"Haan {user_name}? Kuch kehna tha? 😏")
-        return
-
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    reply = get_groq_reply(user.id, user_name, clean_text)
+    reply = get_groq_reply(user.id, user_name, message.text.strip())
     await message.reply_text(reply)
 
 
@@ -205,7 +185,7 @@ def main():
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("💘 Bot webhook mode mein chal raha hai...")
+    logger.info("💘 Anika Bot chal rahi hai...")
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
