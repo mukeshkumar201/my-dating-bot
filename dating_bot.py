@@ -338,6 +338,12 @@ def webhook():
             send_message(chat_id, "Heyy " + user_name + "! 💘 Main Anika hoon, Delhi se!\n\nDigital marketing karti hoon, cooking ka shauk hai 😏\nBolo kya haal hai?")
             return "ok", 200
 
+        # Naya user — pehli baar message kiya bina /start ke
+        if user_id not in user_data:
+            get_user(user_id, user_name)
+            send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo kya haal hai?")
+            return "ok", 200
+
         if text.startswith("/help"):
             send_message(chat_id, "💘 *Commands:*\n\n/start — Mujhse milna\n/flirt — Flirty line\n/icebreaker — Fun sawaal\n/compliment — Special\n/reset — Fresh start\n/stage — Hamari friendship kitni gehri hai\n\nYa seedha bolo! 🔥")
             return "ok", 200
