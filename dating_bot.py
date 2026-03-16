@@ -331,8 +331,7 @@ def webhook():
             return "ok", 200
 
         # ── Admin Commands ──
-        if user_id == ADMIN_ID:
-            if text == "/stats":
+        if text == "/stats":
                 premium_count = len(stars_payments)
                 msg = ("📊 *Anika Stats*\n\n"
                       "👥 Total Users: " + str(len(user_data)) + "\n"
@@ -348,6 +347,7 @@ def webhook():
                 send_message(chat_id, msg)
                 return "ok", 200
 
+        if user_id == ADMIN_ID:
             if text == "/away":
                 AWAY_MODE = True
                 send_message(chat_id, "😴 Away mode ON — Anika busy hai ab!")
@@ -358,7 +358,7 @@ def webhook():
                 send_message(chat_id, "✅ Away mode OFF — Anika wapas aa gayi!")
                 return "ok", 200
 
-            if text == "/broadcast" :
+            if text == "/broadcast":
                 send_message(chat_id, "Broadcast ke liye: /send <message>")
                 return "ok", 200
 
@@ -425,9 +425,10 @@ def webhook():
             send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo!")
             return "ok", 200
 
-        # Group smart handling
+        # Group mein har message pe reply — lekin cooldown rakho spam se bachne ke liye
         if is_group:
-            if not should_reply_group(chat_id, text):
+            last = group_last_reply.get(chat_id, 0)
+            if time.time() - last < 10:  # 10 sec cooldown — spam nahi hoga
                 return "ok", 200
             group_last_reply[chat_id] = time.time()
 
