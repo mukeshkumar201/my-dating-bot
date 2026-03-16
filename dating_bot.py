@@ -7,6 +7,8 @@ Features: Memory System + Relationship Stages
 import os
 import logging
 import random
+import time
+import re
 import requests
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
@@ -23,6 +25,34 @@ app = Flask(__name__)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# ─── Group Smart Handling ─────────────────────────────────────
+group_last_reply = {}   # {chat_id: timestamp} — cooldown track
+COOLDOWN_SECS = 20      # 20 sec mein sirf ek group reply
+REPLY_CHANCE = 0.4      # 40% random reply chance
+
+INTERESTING_KEYWORDS = [
+    "love", "pyaar", "dil", "date", "milna", "coffee", "beautiful",
+    "cute", "hot", "sexy", "flirt", "single", "relationship", "kiss",
+    "hug", "miss", "feel", "alone", "night", "raat", "neend", "soch",
+    "pasand", "achha laga", "bura laga", "khana", "food", "trip", "travel"
+]
+
+ANIKA_NAMES = ["anika", "anu", "anika!", "anika?", "hey anika", "hi anika"]
+
+# Proactive messages Anika khud bhejti hai
+PROACTIVE_MSGS = [
+    "Yaar aaj Makhni ne sofa kharab kar diya 😭 itna pyaara bhi nahi lagta ab",
+    "Office mein aaj ek funny meeting hui 😂 boss ne presentation mein galat slide lagayi",
+    "Aaj ghar pe biryani banayi khud se... perfect nahi tha lekin khaya 😌",
+    "Blue Tokai ka coffee aaj bahut achha tha ☕ wahan baith ke kaam kiya",
+    "Riya ne ek meme bheja aur 10 min haste rahe hum dono 😂",
+    "Aaj subah yoga nahi hui... uth hi nahi payi 😅 guilt feel ho raha hai",
+    "Khan Market mein ek naya restaurant khula hai — kisi ne try kiya? 👀",
+    "Late night chai aur overthinking — meri roz ki kahani 🍵😂",
+    "AP Dhillon ka naya gaana sun liya? Repeat pe hai mere phone pe 🎵",
+    "Kolkata ka rosogulla kabhi try nahi kiya... koi khilayega? 😏",
+]
 
 # ─── User Data Store ───────────────────────────────────────────
 # { user_id: { "name": ..., "city": ..., "msg_count": ..., "stage": ..., "memories": [], "history": [] } }
@@ -83,7 +113,7 @@ CHILDHOOD: Papa ke saath Chandni Chowk Sundays | Mummy ke rajma chawal | Pehli s
 
 ===== BAAT KARNE KA STYLE =====
 SABSE ZAROORI RULES — YEH HAMESHA FOLLOW KAR:
-1. SIRF 1-2 sentences max — isse zyada KABHI mat likho
+1. SIRF 1 sentences max — isse zyada KABHI mat likho
 2. "Darling", "aapka", "aap" KABHI mat bol — hamesha "tum/tumhara" use kar
 3. Hinglish mein bol — jaise real WhatsApp chat hoti hai
 4. Seedha jawab de — bakwaas mat karo
@@ -190,6 +220,42 @@ def build_system_prompt(user_id, user_name):
     prompt += memory_text
 
     return prompt
+
+
+def should_reply_group(chat_id, text, user_name):
+    """Smart decision — group mein reply karein ya nahi"""
+    text_lower = text.lower()
+
+    # 1. Anika ka naam liya toh zaroor reply
+    for name in ANIKA_NAMES:
+        if name in text_lower:
+            return True, "name_mentioned"
+
+    # 2. Question pooch raha hai toh reply
+    if "?" in text or any(w in text_lower for w in ["kya", "kaisa", "kahan", "kyun", "kab", "kaun", "batao", "bolo"]):
+        # Cooldown check
+        last = group_last_reply.get(chat_id, 0)
+        if time.time() - last < COOLDOWN_SECS:
+            return False, "cooldown"
+        return True, "question"
+
+    # 3. Interesting keyword hai toh reply
+    for kw in INTERESTING_KEYWORDS:
+        if kw in text_lower:
+            last = group_last_reply.get(chat_id, 0)
+            if time.time() - last < COOLDOWN_SECS:
+                return False, "cooldown"
+            return True, "interesting"
+
+    # 4. Random 40% chance
+    last = group_last_reply.get(chat_id, 0)
+    if time.time() - last < COOLDOWN_SECS:
+        return False, "cooldown"
+
+    if random.random() < REPLY_CHANCE:
+        return True, "random"
+
+    return False, "skip"
 
 
 def get_groq_reply(user_id, user_name, user_message):
@@ -311,13 +377,22 @@ def webhook():
             send_message(chat_id, "Fresh start! ✨ Ab batao kya haal hai? 😏")
             return "ok", 200
 
-        # Har message pe reply
+        # Smart group vs private handling
+        chat_type = message.get("chat", {}).get("type", "private")
+        is_group = chat_type in ["group", "supergroup"]
+
+        if is_group:
+            should_reply, reason = should_reply_group(chat_id, text, user_name)
+            if not should_reply:
+                return "ok", 200
+            # Cooldown update karo
+            group_last_reply[chat_id] = time.time()
+
         send_typing(chat_id)
         reply = get_groq_reply(user_id, user_name, text)
 
         if reply.startswith("STAGE_CHANGE:"):
             send_message(chat_id, reply[13:])
-            # Ek normal reply bhi bhejo saath mein
             send_typing(chat_id)
             normal_reply = get_groq_reply(user_id, user_name, text)
             if not normal_reply.startswith("STAGE_CHANGE:"):
@@ -335,6 +410,13 @@ def webhook():
 def index():
     return "Anika bot alive!", 200
 
+@app.route("/proactive/<int:chat_id>", methods=["GET"])
+def send_proactive(chat_id):
+    """Google Apps Script se call karo — Anika khud message karegi"""
+    msg = random.choice(PROACTIVE_MSGS)
+    send_message(chat_id, msg)
+    return "sent", 200
+
 
 if __name__ == "__main__":
     try:
@@ -344,4 +426,4 @@ if __name__ == "__main__":
         logger.error("Webhook set error: " + str(e))
 
     logger.info("Anika Bot chal rahi hai...")
-    app.run(host="0.0.0.0", port=PORT)
+    app.run(host="0.0.0.0", port=PORT, threaded=True)
