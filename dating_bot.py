@@ -221,22 +221,33 @@ def get_groq_reply(user_id, user_name, user_message, is_group=False):
 
     system = build_prompt(user_name, user["stage"], user["city"], is_group, TOXIC_LEVEL)
 
-    try:
-        resp = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "system", "content": system}] + user["history"],
-            max_tokens=50,
-            temperature=0.8,
-        )
-        reply = resp.choices[0].message.content.strip()
-
-        user = get_user(user_id, user_name)
-        user["history"].append({"role": "assistant", "content": reply})
-        save_user(user)
-        return reply
-    except Exception as e:
-        logger.error("Groq: " + str(e))
-        return random.choice(["Ek sec 😅", "Thodi busy hoon 😊", "Baad mein? 🙈"])
+    # 3 Model Fallback System
+    # 1. llama-3.3-70b-versatile (best quality, 100K/day)
+    # 2. moonshotai/kimi-k2-instruct (good quality, 300K/day)
+    # 3. meta-llama/llama-4-scout-17b-16e-instruct (500K/day)
+    models = [
+        "meta-llama/llama-4-scout-17b-16e-instruct",
+        "moonshotai/kimi-k2-instruct",
+        "llama-3.3-70b-versatile",
+    ]
+    for model in models:
+        try:
+            resp = groq_client.chat.completions.create(
+                model=model,
+                messages=[{"role": "system", "content": system}] + user["history"],
+                max_tokens=50,
+                temperature=0.8,
+            )
+            reply = resp.choices[0].message.content.strip()
+            user = get_user(user_id, user_name)
+            user["history"].append({"role": "assistant", "content": reply})
+            save_user(user)
+            logger.info("Model: " + model)
+            return reply
+        except Exception as e:
+            logger.warning("Model " + model + " failed, trying next... " + str(e)[:50])
+            continue
+    return random.choice(["Ek sec 😅", "Thodi busy hoon 😊", "Baad mein? 🙈"])
 
 # ─── Group Logic ───────────────────────────────────────────────
 def should_reply_group(chat_id, text):
