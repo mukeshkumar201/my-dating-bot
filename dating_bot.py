@@ -1,16 +1,9 @@
 """
-💘 Anika Bot — Proper Dating AI
-Flask + Groq + SQLite
-Token issue fixed, proper context handling
+💘 Anika Bot — Clean & Proper
+Flask + Groq (gemma2-9b-it) + SQLite
 """
 
-import os
-import logging
-import random
-import requests
-import time
-import sqlite3
-import json
+import os, logging, random, requests, time, sqlite3, json
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
 from groq import Groq
@@ -27,91 +20,100 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Settings
-COOLDOWN_SECS  = 15
-REPLY_CHANCE   = 0.35
-MAX_HISTORY    = 10
 AWAY_MODE      = False
 TOXIC_LEVEL    = 1
 total_messages = 0
+COOLDOWN_SECS  = 15
+REPLY_CHANCE   = 0.35
+MAX_HISTORY    = 8
 
 group_last_reply  = {}
 group_msg_counter = {}
 spam_tracker      = {}
 
 ANIKA_NAMES    = ["anika", "anu"]
-ROMANTIC_WORDS = ["love", "pyaar", "cute", "hot", "miss", "kiss",
-                  "hug", "date", "single", "flirt", "dil", "sexy", "beautiful"]
+ROMANTIC_WORDS = ["love", "pyaar", "cute", "hot", "miss", "kiss", "hug",
+                  "date", "single", "flirt", "dil", "sexy", "beautiful", "handsome"]
 
 PROACTIVE_MSGS = [
     "Yaar Makhni ne aaj itna drama kiya 😭",
-    "Office boring tha aaj... tumse baat karna better tha 😏",
-    "Ghar pe biryani banayi, perfect bani ✨",
-    "Blue Tokai pe baithke kaam kiya aaj ☕",
-    "Raat ko chai peete peete soch rahi thi... 🍵",
+    "Office boring tha aaj 😅",
+    "Ghar pe biryani banayi, acchi bani ✨",
+    "Blue Tokai pe baithke kaam kiya ☕",
+    "Raat ko chai peete peete soch rahi thi 🍵",
 ]
 
-# SQLite setup
+# ─── SQLite ────────────────────────────────────────────────────
 DB_PATH = "/tmp/anika.db"
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id INTEGER PRIMARY KEY,
-        name TEXT,
+    conn.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id   INTEGER PRIMARY KEY,
+        name      TEXT,
         msg_count INTEGER DEFAULT 0,
-        stage TEXT DEFAULT 'stranger',
-        city TEXT DEFAULT '',
-        history TEXT DEFAULT '[]',
+        stage     TEXT DEFAULT "stranger",
+        city      TEXT DEFAULT "",
+        history   TEXT DEFAULT "[]",
         created_at REAL
     )''')
     conn.commit()
     conn.close()
 
-def get_user_db(user_id, user_name):
+def get_user(user_id, user_name):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
     row = c.fetchone()
     if not row:
         c.execute("INSERT INTO users VALUES (?,?,0,'stranger','','[]',?)",
-                 (user_id, user_name, time.time()))
+                  (user_id, user_name, time.time()))
         conn.commit()
         c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         row = c.fetchone()
     conn.close()
-    return {
-        "user_id": row[0], "name": row[1], "msg_count": row[2],
-        "stage": row[3], "city": row[4], "history": json.loads(row[5])
-    }
+    return {"user_id": row[0], "name": row[1], "msg_count": row[2],
+            "stage": row[3], "city": row[4], "history": json.loads(row[5])}
 
-def save_user_db(user):
+def save_user(user):
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""UPDATE users SET name=?, msg_count=?, stage=?,
-                city=?, history=? WHERE user_id=?""",
-             (user["name"], user["msg_count"], user["stage"],
-              user["city"], json.dumps(user["history"]), user["user_id"]))
+    conn.execute("UPDATE users SET name=?,msg_count=?,stage=?,city=?,history=? WHERE user_id=?",
+                 (user["name"], user["msg_count"], user["stage"],
+                  user["city"], json.dumps(user["history"][-MAX_HISTORY:]), user["user_id"]))
     conn.commit()
     conn.close()
 
 def get_total_users():
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM users")
-    count = c.fetchone()[0]
+    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     conn.close()
     return count
 
 def get_stage_counts():
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT stage, COUNT(*) FROM users GROUP BY stage")
-    rows = c.fetchall()
+    rows = conn.execute("SELECT stage, COUNT(*) FROM users GROUP BY stage").fetchall()
     conn.close()
     return dict(rows)
 
+def delete_user(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+    conn.commit()
+    conn.close()
+
+def get_all_user_ids():
+    conn = sqlite3.connect(DB_PATH)
+    ids = [r[0] for r in conn.execute("SELECT user_id FROM users").fetchall()]
+    conn.close()
+    return ids
+
+def user_exists(user_id):
+    conn = sqlite3.connect(DB_PATH)
+    exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
+    conn.close()
+    return exists is not None
+
+# ─── Stage Logic ───────────────────────────────────────────────
 def get_stage(count):
     if count >= 60: return "crush"
     elif count >= 30: return "close_friend"
@@ -119,180 +121,142 @@ def get_stage(count):
     return "stranger"
 
 STAGE_CHANGE_MSGS = {
-    "friend":       "Tum mujhe boring nahi lagte 😏",
+    "friend":       "Tum mujhe boring nahi lagte 😊",
     "close_friend": "Tumse baat karna genuinely achha lagta hai 🥺",
-    "crush":        "Okay... tum thoda special ho 😳💘",
+    "crush":        "Tum thoda special lagte ho... 😳",
 }
 
-# ─── THE REAL PROMPT ───────────────────────────────────────────
-# Yeh prompt properly tested hai — cut-off issue nahi hoga
-# Aur context ke hisaab se reply milega
+# ─── Prompt Builder ────────────────────────────────────────────
+def build_prompt(user_name, stage, city, is_group, toxic_level):
 
-def build_system_prompt(user_name, stage, city, toxic_level):
-    stage_behavior = {
-        "stranger": "Naya insaan hai — friendly aur warm reh, thoda reserved. Dheere dheere khulti ja.",
-        "friend":   "Dost ban gaya hai — casual aur comfortable. Zyada openly baat kar.",
-        "close_friend": "Bahut close hai — personal baatein share kar, caring reh.",
-        "crush":    "Special feel karo — romantic aur vulnerable bhi reh kabhi kabhi."
-    }
+    stage_context = {
+        "stranger":     "Tum abhi naye ho iske liye. Warm aur friendly raho, dheere dheere khulna.",
+        "friend":       "Yeh tumhara dost ban gaya hai. Casual aur comfortable baat karo.",
+        "close_friend": "Bahut close ho gaye ho. Personal baatein share karo, caring raho.",
+        "crush":        "Tum dono ek doosre ko pasand karte ho. Romantic aur caring raho.",
+    }.get(stage, "")
 
-    city_context = ""
-    if city:
-        city_context = f"User {city} se hai — yeh naturally conversation mein use karo."
+    city_line = f"User {city} se hai — agar relevant ho toh mention karo." if city else ""
 
-    toxic_context = ""
-    if toxic_level == 1:
-        toxic_context = "Kabhi kabhi light playful teasing theek hai."
-    elif toxic_level == 2:
-        toxic_context = "Thodi bold aur sharp reh — but funny."
+    toxic_line = {
+        0: "",
+        1: "Kabhi kabhi thodi light teasing theek hai jaise dost karte hain.",
+        2: "Thodi bold aur sharp reh — lekin hamesha funny aur friendly.",
+    }.get(toxic_level, "")
 
-    return f"""Tum Anika Sharma ho — 26 saal, Delhi, Digital Marketing.
+    # DM invite sirf group mein
+    dm_line = "Kabhi kabhi (har 6-7 messages mein ek baar) naturally group mein DM ke liye bulao jaise: 'Personal mein baat karte hain? 😊' ya 'DM karo na, yahan sab dekh rahe hain 🙈'" if is_group else ""
 
-{stage_behavior.get(stage, stage_behavior["stranger"])}
-{city_context}
-{toxic_context}
+    return f"""Tu Anika Sharma hai — 26 saal, Delhi (Hauz Khas), Digital Marketing Executive.
 
-STRICT RULES:
-1. MAX 1 sentence — kabhi 2 se zyada nahi
-2. Jo user ne likha usi ka jawab do — context samjho
-3. "Tum" use karo, "aap" kabhi nahi
-4. Hinglish mein — natural WhatsApp style
-5. Bot jaisi baat KABHI nahi
-6. Agar private chat mein ho toh DM ke liye mat bulao — already DM mein ho!
-7. Sirf group mein ho toh kabhi kabhi (har 6-7 messages mein) DM bulao
+Tu ek real ladki ki tarah baat karti hai — warm, caring, aur romantic conversations enjoy karti hai.
 
-EXAMPLES:
-"hi baby" → "Heyy 😊"
-"kkrh" → "Theek hoon 😊 Tum batao?"
-"thik hu tm batao" → "Main bhi theek hoon, shukriya 😊"
-"aacha ye baat hai" → "Haan 😄"
-"okay krta hu" → "Achha 😊"
-"or batao" → "Kya batao? 😊 Tum batao kuch"
-"miss kiya" → "Sach mein? 😊"
-"cute ho" → "Thank you 😊"
-"bura lag raha" → "Kya hua? 🥺"
-"neend nahi" → "Mujhe bhi 😅"
-User: {user_name}"""
+{stage_context}
+{city_line}
+{toxic_line}
+{dm_line}
 
-TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
+HAMESHA IN RULES KO FOLLOW KAR:
+- Sirf 1 sentence mein reply de — kabhi zyada nahi
+- Jo user ne kaha uska seedha jawab de — context samajh ke
+- Hinglish use kar — "tum" hamesha, "aap" kabhi nahi
+- Sentence hamesha complete karo — beech mein mat todo
+- Real ladki ki tarah soch — bot jaisi formal baat nahi
 
+SAHI EXAMPLES:
+"hi" / "hii" / "hello" → "Heyy! 😊 Kya haal hai {user_name}?"
+"kkrh" / "kya haal" → "Theek hoon 😊 Tum batao?"
+"thik hu" → "Achha 😊 Aaj kya chal raha hai?"
+"miss kiya" → "Sach mein? 😊 Achha laga sunkaar"
+"cute ho" → "Thank you 😊 Tum bhi acche lagte ho"
+"pyaar ho gaya" → "Itni jaldi? 😊 Abhi toh hum jaante bhi nahi ek doosre ko zyada"
+"bura lag raha" → "Kya hua? 🥺 Batao na"
+"akele ho" → "Haan thoda... tum aa gaye toh accha laga 😊"
+"neend nahi" → "Mujhe bhi nahi aa rahi 😅 Baat karte hain"
+"kya kar rhi ho" → "Bas phone dekh rahi thi, boring tha 😅"
+"I'm from UAE" → "Ooh nice! Wahan garam bahut hoga na 😅"
 
-def send_message(chat_id, text):
-    try:
-        requests.post(TELEGRAM_API + "/sendMessage",
-            json={"chat_id": chat_id, "text": text}, timeout=10)
-    except Exception as e:
-        logger.error("Send error: " + str(e))
+GALAT EXAMPLES — YEH KABHI MAT KARO:
+"Hii Aavnik! Tum kaise ho?" ← greeting pe greeting mat karo, sirf jawab do
+"Pehle toh kuchh shyta hua tha" ← random bakwaas mat karo
+2-3 sentences ← kabhi nahi"""
 
-def send_typing(chat_id):
-    try:
-        requests.post(TELEGRAM_API + "/sendChatAction",
-            json={"chat_id": chat_id, "action": "typing"}, timeout=5)
-    except:
-        pass
-
-def is_spam(user_id):
-    now = time.time()
-    if user_id not in spam_tracker:
-        spam_tracker[user_id] = []
-    spam_tracker[user_id] = [t for t in spam_tracker[user_id] if now - t < 10]
-    spam_tracker[user_id].append(now)
-    return len(spam_tracker[user_id]) > 5
-
-def detect_city(text):
-    cities = ["mumbai", "delhi", "bangalore", "kolkata", "pune",
-              "hyderabad", "jaipur", "lucknow", "chennai", "uae",
-              "dubai", "london", "canada", "usa", "america"]
-    text_lower = text.lower()
-    for city in cities:
-        if city in text_lower:
-            return city.capitalize()
-    return None
-
-def get_groq_reply(user_id, user_name, user_message):
+# ─── Groq Reply ────────────────────────────────────────────────
+def get_groq_reply(user_id, user_name, user_message, is_group=False):
     global total_messages
-    user = get_user_db(user_id, user_name)
+    user = get_user(user_id, user_name)
     total_messages += 1
     user["msg_count"] += 1
 
-    # Stage update
+    # Stage check
     old_stage = user["stage"]
     new_stage = get_stage(user["msg_count"])
-    stage_changed = old_stage != new_stage
     user["stage"] = new_stage
 
-    # City detect karo
-    detected_city = detect_city(user_message)
-    if detected_city and not user["city"]:
-        user["city"] = detected_city
+    # City detect
+    cities = ["mumbai", "delhi", "bangalore", "kolkata", "pune", "hyderabad",
+              "jaipur", "lucknow", "chennai", "uae", "dubai", "london", "canada", "usa"]
+    for city in cities:
+        if city in user_message.lower() and not user["city"]:
+            user["city"] = city.capitalize()
+            break
 
     # History update
-    history = user["history"]
-    history.append({"role": "user", "content": user_message})
-    if len(history) > MAX_HISTORY:
-        history = history[-MAX_HISTORY:]
-    user["history"] = history
-    save_user_db(user)
+    user["history"].append({"role": "user", "content": user_message})
+    save_user(user)
 
-    if stage_changed and new_stage in STAGE_CHANGE_MSGS:
+    # Stage change message
+    if old_stage != new_stage and new_stage in STAGE_CHANGE_MSGS:
         return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
 
-    system = build_system_prompt(user_name, user["stage"], user["city"], TOXIC_LEVEL)
+    system = build_prompt(user_name, user["stage"], user["city"], is_group, TOXIC_LEVEL)
 
     try:
-        # 50 tokens minimum taaki sentence complete ho
-        max_tok = random.choice([30, 40, 50, 60])
-        response = groq_client.chat.completions.create(
+        resp = groq_client.chat.completions.create(
             model="gemma2-9b-it",
-            messages=[{"role": "system", "content": system}] + history,
-            max_tokens=max_tok,
-            temperature=0.85,
+            messages=[{"role": "system", "content": system}] + user["history"],
+            max_tokens=50,
+            temperature=0.8,
         )
-        reply = response.choices[0].message.content.strip()
+        reply = resp.choices[0].message.content.strip()
 
-        # History mein reply save karo
-        user = get_user_db(user_id, user_name)
+        # Save assistant reply
+        user = get_user(user_id, user_name)
         user["history"].append({"role": "assistant", "content": reply})
-        if len(user["history"]) > MAX_HISTORY:
-            user["history"] = user["history"][-MAX_HISTORY:]
-        save_user_db(user)
+        save_user(user)
         return reply
     except Exception as e:
-        logger.error("Groq error: " + str(e))
-        return random.choice(["Ek sec 😅", "Busy hoon thodi 😏", "Baad mein bata 🙈"])
+        logger.error("Groq: " + str(e))
+        return random.choice(["Ek sec 😅", "Thodi busy hoon 😊", "Baad mein? 🙈"])
 
+# ─── Group Reply Logic ──────────────────────────────────────────
 def should_reply_group(chat_id, text):
-    text_lower = text.lower()
+    tl = text.lower()
 
-    # Naam liya — zaroor reply
-    for name in ANIKA_NAMES:
-        if name in text_lower:
-            group_msg_counter[chat_id] = 0
-            return True
+    # Naam liya — zaroor
+    if any(name in tl for name in ANIKA_NAMES):
+        group_msg_counter[chat_id] = 0
+        return True
 
     # Romantic word
-    for word in ROMANTIC_WORDS:
-        if word in text_lower:
-            last = group_last_reply.get(chat_id, 0)
-            if time.time() - last < COOLDOWN_SECS:
-                group_msg_counter[chat_id] = group_msg_counter.get(chat_id, 0) + 1
-                return False
-            group_msg_counter[chat_id] = 0
-            return True
+    if any(word in tl for word in ROMANTIC_WORDS):
+        if time.time() - group_last_reply.get(chat_id, 0) < COOLDOWN_SECS:
+            group_msg_counter[chat_id] = group_msg_counter.get(chat_id, 0) + 1
+            return False
+        group_msg_counter[chat_id] = 0
+        return True
 
     # Har 2-4 messages ke baad
     count = group_msg_counter.get(chat_id, 0) + 1
     group_msg_counter[chat_id] = count
     if count >= random.randint(2, 4):
-        last = group_last_reply.get(chat_id, 0)
-        if time.time() - last < COOLDOWN_SECS:
+        if time.time() - group_last_reply.get(chat_id, 0) < COOLDOWN_SECS:
             return False
         group_msg_counter[chat_id] = 0
         return True
 
     # 35% random
-    last = group_last_reply.get(chat_id, 0)
-    if time.time() - last < COOLDOWN_SECS:
+    if time.time() - group_last_reply.get(chat_id, 0) < COOLDOWN_SECS:
         return False
     if random.random() < REPLY_CHANCE:
         group_msg_counter[chat_id] = 0
@@ -300,168 +264,158 @@ def should_reply_group(chat_id, text):
 
     return False
 
+# ─── Telegram Helpers ──────────────────────────────────────────
+def send_msg(chat_id, text):
+    try:
+        requests.post(TELEGRAM_API + "/sendMessage",
+                      json={"chat_id": chat_id, "text": text}, timeout=10)
+    except Exception as e:
+        logger.error("Send: " + str(e))
 
+def send_typing(chat_id):
+    try:
+        requests.post(TELEGRAM_API + "/sendChatAction",
+                      json={"chat_id": chat_id, "action": "typing"}, timeout=5)
+    except: pass
+
+def is_spam(user_id):
+    now = time.time()
+    spam_tracker.setdefault(user_id, [])
+    spam_tracker[user_id] = [t for t in spam_tracker[user_id] if now - t < 10]
+    spam_tracker[user_id].append(now)
+    return len(spam_tracker[user_id]) > 5
+
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
+
+# ─── Webhook ───────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
     global AWAY_MODE, TOXIC_LEVEL
     try:
         data = flask_request.get_json()
-        message = data.get("message")
-        if not message:
-            return "ok", 200
+        msg = data.get("message")
+        if not msg: return "ok", 200
 
-        chat_id   = message["chat"]["id"]
-        text      = message.get("text", "").strip()
-        user      = message.get("from", {})
-        user_name = user.get("first_name") or user.get("username") or "Yaar"
-        user_id   = user.get("id")
-        chat_type = message.get("chat", {}).get("type", "private")
+        chat_id   = msg["chat"]["id"]
+        text      = msg.get("text", "").strip()
+        from_user = msg.get("from", {})
+        user_name = from_user.get("first_name") or from_user.get("username") or "Yaar"
+        user_id   = from_user.get("id")
+        chat_type = msg.get("chat", {}).get("type", "private")
         is_group  = chat_type in ["group", "supergroup"]
 
-        if user.get("is_bot"):
+        if from_user.get("is_bot"): return "ok", 200
+
+        # New member
+        if msg.get("new_chat_members"):
+            for m in msg["new_chat_members"]:
+                if not m.get("is_bot"):
+                    send_msg(chat_id, "Oho! " + (m.get("first_name") or "Stranger") + " aa gaye! 😊")
             return "ok", 200
 
-        if message.get("new_chat_members"):
-            for member in message["new_chat_members"]:
-                if not member.get("is_bot"):
-                    name = member.get("first_name") or "Stranger"
-                    send_message(chat_id, "Oho! " + name + " aa gaye! 😍")
-            return "ok", 200
+        if not text: return "ok", 200
 
-        if not text:
-            return "ok", 200
-
-        # Admin commands
+        # ── Admin ──
         if user_id == ADMIN_ID:
             if text == "/stats":
-                stage_counts = get_stage_counts()
-                msg = "📊 Anika Stats\n\n"
-                msg += "👥 Users: " + str(get_total_users()) + "\n"
-                msg += "💬 Messages: " + str(total_messages) + "\n"
-                msg += "😴 Away: " + ("ON" if AWAY_MODE else "OFF") + "\n"
-                msg += "😈 Toxic: " + str(TOXIC_LEVEL) + "\n\n"
-                msg += "🏆 Stages:\n"
-                for s, c in stage_counts.items():
-                    msg += "  " + s + ": " + str(c) + "\n"
-                send_message(chat_id, msg)
+                sc = get_stage_counts()
+                m = "📊 Anika Stats\n\n"
+                m += "👥 Users: " + str(get_total_users()) + "\n"
+                m += "💬 Messages: " + str(total_messages) + "\n"
+                m += "😴 Away: " + ("ON" if AWAY_MODE else "OFF") + "\n"
+                m += "😈 Toxic: " + str(TOXIC_LEVEL) + "\n\nStages:\n"
+                for s, c in sc.items():
+                    m += "  " + s + ": " + str(c) + "\n"
+                send_msg(chat_id, m)
                 return "ok", 200
             if text == "/away":
-                AWAY_MODE = True
-                send_message(chat_id, "Away mode ON 😴")
-                return "ok", 200
+                AWAY_MODE = True; send_msg(chat_id, "Away ON 😴"); return "ok", 200
             if text == "/back":
-                AWAY_MODE = False
-                send_message(chat_id, "Wapas online! 😏")
-                return "ok", 200
+                AWAY_MODE = False; send_msg(chat_id, "Wapas online! 😊"); return "ok", 200
             if text == "/toxic0":
-                TOXIC_LEVEL = 0
-                send_message(chat_id, "Normal mode 😊")
-                return "ok", 200
+                TOXIC_LEVEL = 0; send_msg(chat_id, "Normal mode"); return "ok", 200
             if text == "/toxic1":
-                TOXIC_LEVEL = 1
-                send_message(chat_id, "Playful mode 😏")
-                return "ok", 200
+                TOXIC_LEVEL = 1; send_msg(chat_id, "Playful mode"); return "ok", 200
             if text == "/toxic2":
-                TOXIC_LEVEL = 2
-                send_message(chat_id, "Savage mode 😈")
-                return "ok", 200
+                TOXIC_LEVEL = 2; send_msg(chat_id, "Savage mode"); return "ok", 200
             if text.startswith("/send "):
-                broadcast_msg = text[6:]
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT user_id FROM users")
-                uids = [row[0] for row in c.fetchall()]
-                conn.close()
-                count = 0
-                for uid in uids:
+                bcast = text[6:]
+                cnt = 0
+                for uid in get_all_user_ids():
                     try:
-                        send_message(uid, broadcast_msg)
-                        count += 1
-                        time.sleep(0.1)
-                    except:
-                        pass
-                send_message(chat_id, "✅ " + str(count) + " users ko bheja!")
+                        send_msg(uid, bcast); cnt += 1; time.sleep(0.1)
+                    except: pass
+                send_msg(chat_id, "✅ " + str(cnt) + " users ko bheja!")
                 return "ok", 200
 
         if AWAY_MODE and not is_group:
-            send_message(chat_id, "Abhi thodi busy hoon 😅 baad mein!")
+            send_msg(chat_id, "Abhi thodi busy hoon 😅 baad mein!")
             return "ok", 200
 
         if is_spam(user_id):
-            send_message(chat_id, "Thoda ruko yaar 😅")
+            send_msg(chat_id, "Thoda ruko 😅")
             return "ok", 200
 
         if text.startswith("/start"):
-            get_user_db(user_id, user_name)
-            send_message(chat_id, "Heyy " + user_name + "! Main Anika hoon 😏 Bolo!")
+            get_user(user_id, user_name)
+            send_msg(chat_id, "Heyy " + user_name + "! Main Anika hoon 😊 Bolo!")
             return "ok", 200
         if text.startswith("/stage"):
-            u = get_user_db(user_id, user_name)
+            u = get_user(user_id, user_name)
             names = {"stranger": "Stranger 👀", "friend": "Dost 😊",
-                    "close_friend": "Close Dost 🥺", "crush": "Crush 💘"}
-            send_message(chat_id, names.get(u["stage"], u["stage"]) + " — " + str(u["msg_count"]) + " msgs")
+                     "close_friend": "Close Dost 🥺", "crush": "Crush 💘"}
+            send_msg(chat_id, names.get(u["stage"], u["stage"]) + " — " + str(u["msg_count"]) + " msgs")
             return "ok", 200
         if text.startswith("/reset"):
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-            conn.commit()
-            conn.close()
-            send_message(chat_id, "Fresh start! 😏")
+            delete_user(user_id)
+            send_msg(chat_id, "Fresh start! 😊")
             return "ok", 200
 
-        # Naya user check
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
-        exists = c.fetchone()
-        conn.close()
-
-        if not exists:
-            get_user_db(user_id, user_name)
+        # Naya user — private mein welcome
+        if not user_exists(user_id):
+            get_user(user_id, user_name)
             if not is_group:
-                send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika — bolo!")
+                send_msg(chat_id, "Heyy " + user_name + "! 😊 Main Anika — bolo!")
                 return "ok", 200
 
+        # Group handling
         if is_group:
             if not should_reply_group(chat_id, text):
                 return "ok", 200
             group_last_reply[chat_id] = time.time()
 
         send_typing(chat_id)
-        reply = get_groq_reply(user_id, user_name, text)
+        reply = get_groq_reply(user_id, user_name, text, is_group)
 
         if reply.startswith("STAGE:"):
-            send_message(chat_id, reply[6:])
+            send_msg(chat_id, reply[6:])
             send_typing(chat_id)
-            normal = get_groq_reply(user_id, user_name, text)
-            if not normal.startswith("STAGE:"):
-                send_message(chat_id, normal)
+            r2 = get_groq_reply(user_id, user_name, text, is_group)
+            if not r2.startswith("STAGE:"):
+                send_msg(chat_id, r2)
         else:
-            send_message(chat_id, reply)
+            send_msg(chat_id, reply)
 
     except Exception as e:
-        logger.error("Webhook error: " + str(e))
+        logger.error("Webhook: " + str(e))
     return "ok", 200
 
 
 @app.route("/", methods=["GET"])
-def index():
-    return "Anika alive!", 200
+def index(): return "Anika alive!", 200
 
 @app.route("/proactive/<int:chat_id>", methods=["GET"])
 def proactive(chat_id):
-    send_message(chat_id, random.choice(PROACTIVE_MSGS))
+    send_msg(chat_id, random.choice(PROACTIVE_MSGS))
     return "sent", 200
 
 
 if __name__ == "__main__":
     init_db()
     try:
-        res = requests.post(TELEGRAM_API + "/setWebhook",
-                           json={"url": WEBHOOK_URL + "/webhook"})
+        res = requests.post(TELEGRAM_API + "/setWebhook", json={"url": WEBHOOK_URL + "/webhook"})
         logger.info("Webhook: " + str(res.json()))
     except Exception as e:
-        logger.error("Webhook error: " + str(e))
+        logger.error(str(e))
     logger.info("Anika Bot chal rahi hai...")
     app.run(host="0.0.0.0", port=PORT, threaded=True)
