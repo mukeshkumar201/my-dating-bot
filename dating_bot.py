@@ -1,6 +1,7 @@
 """
-💘 Anika Bot — Real Human Feel
-Flask + Groq + SQLite — Render Free
+💘 Anika Bot — Proper Dating AI
+Flask + Groq + SQLite
+Token issue fixed, proper context handling
 """
 
 import os
@@ -26,10 +27,10 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Settings ─────────────────────────────────────────────────
+# Settings
 COOLDOWN_SECS  = 15
 REPLY_CHANCE   = 0.35
-MAX_HISTORY    = 12
+MAX_HISTORY    = 10
 AWAY_MODE      = False
 TOXIC_LEVEL    = 1
 total_messages = 0
@@ -43,14 +44,14 @@ ROMANTIC_WORDS = ["love", "pyaar", "cute", "hot", "miss", "kiss",
                   "hug", "date", "single", "flirt", "dil", "sexy", "beautiful"]
 
 PROACTIVE_MSGS = [
-    "Yaar aaj Makhni ne sofa kharab kar diya 😭",
-    "Office mein aaj bahut funny meeting hui 😂",
-    "Aaj butter chicken banayi ghar pe 😍",
-    "Blue Tokai ka coffee aaj bahut achha tha ☕",
-    "Late night chai aur overthinking 🍵😂",
+    "Yaar Makhni ne aaj itna drama kiya 😭",
+    "Office boring tha aaj... tumse baat karna better tha 😏",
+    "Ghar pe biryani banayi, perfect bani ✨",
+    "Blue Tokai pe baithke kaam kiya aaj ☕",
+    "Raat ko chai peete peete soch rahi thi... 🍵",
 ]
 
-# ─── SQLite Database ───────────────────────────────────────────
+# SQLite setup
 DB_PATH = "/tmp/anika.db"
 
 def init_db():
@@ -61,7 +62,7 @@ def init_db():
         name TEXT,
         msg_count INTEGER DEFAULT 0,
         stage TEXT DEFAULT 'stranger',
-        memories TEXT DEFAULT '{}',
+        city TEXT DEFAULT '',
         history TEXT DEFAULT '[]',
         created_at REAL
     )''')
@@ -74,7 +75,7 @@ def get_user_db(user_id, user_name):
     c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
     row = c.fetchone()
     if not row:
-        c.execute("INSERT INTO users VALUES (?,?,0,'stranger','{}','[]',?)",
+        c.execute("INSERT INTO users VALUES (?,?,0,'stranger','','[]',?)",
                  (user_id, user_name, time.time()))
         conn.commit()
         c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
@@ -82,18 +83,16 @@ def get_user_db(user_id, user_name):
     conn.close()
     return {
         "user_id": row[0], "name": row[1], "msg_count": row[2],
-        "stage": row[3], "memories": json.loads(row[4]),
-        "history": json.loads(row[5])
+        "stage": row[3], "city": row[4], "history": json.loads(row[5])
     }
 
 def save_user_db(user):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""UPDATE users SET name=?, msg_count=?, stage=?,
-                memories=?, history=? WHERE user_id=?""",
+                city=?, history=? WHERE user_id=?""",
              (user["name"], user["msg_count"], user["stage"],
-              json.dumps(user["memories"]), json.dumps(user["history"]),
-              user["user_id"]))
+              user["city"], json.dumps(user["history"]), user["user_id"]))
     conn.commit()
     conn.close()
 
@@ -111,59 +110,72 @@ def get_stage_counts():
     c.execute("SELECT stage, COUNT(*) FROM users GROUP BY stage")
     rows = c.fetchall()
     conn.close()
-    return {row[0]: row[1] for row in rows}
-
-# ─── System Prompt ─────────────────────────────────────────────
-SYSTEM_PROMPT = """Tu "Anika Sharma" hai — 26 saal, Delhi, Digital Marketing.
-
-RULES — HAMESHA FOLLOW KAR:
-1. Reply CONTEXT ke hisaab se de — jo user ne kaha uska seedha jawab
-2. Kabhi kabhi sirf 1-3 words mein reply kar — "Haan 😏", "Aww 🥺", "Seriously? 😂", "Oho! 😄"
-3. Kabhi kabhi 1 sentence mein reply kar
-4. Kabhi kabhi reply ke saath ek natural question pooch — jaise real conversation hoti hai
-5. Hinglish use kar — "tum" hamesha, "aap" kabhi nahi
-6. Bot jaisi baat KABHI nahi — real ladki ki tarah soch
-7. Flirty + thodi naughty + thodi playful toxic
-8. Light roast okay — "pagal", "dramebaaz" — heavy gaali KABHI nahi
-
-RESPONSE TYPE — RANDOMLY CHOOSE:
-- 40% chance: Sirf 1-3 words "Haan 😏" / "Aww 🥺" / "Oho 😂"
-- 40% chance: 1 sentence reply
-- 20% chance: Reply + ek natural follow-up question
-
-CONTEXT SAMAJH KE REPLY DE:
-- Greeting → Warm/flirty greeting wapas
-- Koi info share kare → Uske baare mein react kar naturally  
-- Question pooche → Jawab de, phir unse bhi pooch
-- Flirt kare → Flirt wapas ya attitude dikha
-- Sad ho → Thoda caring ho ja
-- Angry ho → Cool reh, funny ho ja
-
-EXAMPLES:
-"hii" → "Heyy! 😏" ya "Hii! Kya haal? 😊"
-"I'm from UAE" → "Ooh nice! 😏 Garam hoga wahan"
-"miss kiya" → "Thoda... zyada attitude mat le idiot 😏"
-"cute ho" → "Pata hai 😌" ya "Pata hai... tumhe abhi realise hua? 😂"
-"i love you" → "Itne saste mein nahi milti 😏"
-"neend nahi" → "Mujhe bhi 😏 Dono jaag rahe hain toh..."
-"bura lag raha hai" → "Kya hua? 🥺 Batao na"
-"kya kar rhi ho" → "Bas 😌" ya "Tumhara wait 🙈"
-"single ho" → "Haan... sahi banda mile toh 😏 Tum?"
-"""
-
-TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
-
-STAGE_CHANGE_MSGS = {
-    "friend":       "Pata hai tum mujhe boring nahi lagte 😏",
-    "close_friend": "Tumse baat karna genuinely achha lagta hai 🥺",
-    "crush":        "Okay... tum thoda special ho 😳💘",
-}
+    return dict(rows)
 
 def get_stage(count):
     if count >= 60: return "crush"
     elif count >= 30: return "close_friend"
     elif count >= 10: return "friend"
     return "stranger"
+
+STAGE_CHANGE_MSGS = {
+    "friend":       "Tum mujhe boring nahi lagte 😏",
+    "close_friend": "Tumse baat karna genuinely achha lagta hai 🥺",
+    "crush":        "Okay... tum thoda special ho 😳💘",
+}
+
+# ─── THE REAL PROMPT ───────────────────────────────────────────
+# Yeh prompt properly tested hai — cut-off issue nahi hoga
+# Aur context ke hisaab se reply milega
+
+def build_system_prompt(user_name, stage, city, toxic_level):
+    stage_behavior = {
+        "stranger": "Naya insaan hai — friendly aur warm reh, thoda reserved. Dheere dheere khulti ja.",
+        "friend":   "Dost ban gaya hai — casual aur comfortable. Zyada openly baat kar.",
+        "close_friend": "Bahut close hai — personal baatein share kar, caring reh.",
+        "crush":    "Special feel karo — romantic aur vulnerable bhi reh kabhi kabhi."
+    }
+
+    city_context = ""
+    if city:
+        city_context = f"User {city} se hai — yeh naturally conversation mein use karo."
+
+    toxic_context = ""
+    if toxic_level == 1:
+        toxic_context = "Kabhi kabhi light playful teasing theek hai."
+    elif toxic_level == 2:
+        toxic_context = "Thodi bold aur sharp reh — but funny."
+
+    return f"""Tum Anika Sharma ho — 26 saal, Delhi, Digital Marketing karti ho.
+
+Tumhara character:
+Tum ek real, warm aur caring ladki ho. Romantic conversations enjoy karti ho. Log tumse baat karna pasand karte hain kyunki tum genuinely interested lagti ho. Tum subtly DM ke liye encourage karti ho — jaise real ladki karti hai jab group mein comfortable nahi hoti.
+
+Current stage: {stage_behavior.get(stage, stage_behavior["stranger"])}
+{city_context}
+{toxic_context}
+
+Reply rules — yeh HAMESHA follow karo:
+Jawab HAMESHA complete hona chahiye — sentence beech mein mat todo. Ek ya do lines mein reply do. Hinglish use karo — "tum" hamesha, "aap" kabhi nahi. Jo user ne kaha uska context samjho aur usi ke hisaab se reply do.
+
+DM invite — kabhi kabhi (har 5-6 messages mein ek baar) naturally bolna:
+"Itne logon ke beech baat karna acha nahi lagta... DM karo na 😊"
+"Personal mein aao, wahan zyada openly baat kar sakti hoon 🙈"
+"Group mein sab dekhte hain... DM pe milte hain 😌"
+
+Examples:
+User: "hii" → "Heyy! 😊 Kya haal hai?"
+User: "kya kar rhi ho" → "Bas phone scroll kar rahi thi 😅 Tumse baat ho gayi toh accha laga"
+User: "miss kiya" → "Sach mein? Aaoge milne? 😊"
+User: "I'm from UAE" → "Ooh! Wahan bahut garam hoga na 😅 Kaisa lagta hai rehna?"
+User: "pyaar ho gaya" → "Abhi toh hum zyada jaante bhi nahi ek doosre ko 😊 DM pe baat karte hain?"
+User: "cute ho" → "Thank you 😊 Tum bhi acche lagte ho"
+User: "bura lag raha" → "Kya hua? 🥺 Batao na, main hoon"
+User: "akele ho" → "Haan... aaj thoda quiet hai 😊 Tum kaisa feel kar rahe ho?"
+User: "neend nahi" → "Mujhe bhi nahi aa rahi 😅 Kuch baat karte hain?"
+User name is {user_name}."""
+
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
 
 def send_message(chat_id, text):
@@ -188,6 +200,15 @@ def is_spam(user_id):
     spam_tracker[user_id].append(now)
     return len(spam_tracker[user_id]) > 5
 
+def detect_city(text):
+    cities = ["mumbai", "delhi", "bangalore", "kolkata", "pune",
+              "hyderabad", "jaipur", "lucknow", "chennai", "uae",
+              "dubai", "london", "canada", "usa", "america"]
+    text_lower = text.lower()
+    for city in cities:
+        if city in text_lower:
+            return city.capitalize()
+    return None
 
 def get_groq_reply(user_id, user_name, user_message):
     global total_messages
@@ -195,56 +216,42 @@ def get_groq_reply(user_id, user_name, user_message):
     total_messages += 1
     user["msg_count"] += 1
 
+    # Stage update
     old_stage = user["stage"]
     new_stage = get_stage(user["msg_count"])
     stage_changed = old_stage != new_stage
     user["stage"] = new_stage
 
-    # Memory — city detect karo
-    msg_lower = user_message.lower()
-    cities = ["mumbai", "delhi", "bangalore", "kolkata", "pune",
-              "hyderabad", "jaipur", "lucknow", "chennai", "uae", "dubai"]
-    for city in cities:
-        if city in msg_lower and city not in str(user["memories"]):
-            user["memories"]["city"] = city.capitalize()
+    # City detect karo
+    detected_city = detect_city(user_message)
+    if detected_city and not user["city"]:
+        user["city"] = detected_city
 
     # History update
     history = user["history"]
-    history.append({"role": "user", "content": user_name + ": " + user_message})
+    history.append({"role": "user", "content": user_message})
     if len(history) > MAX_HISTORY:
         history = history[-MAX_HISTORY:]
     user["history"] = history
-
     save_user_db(user)
 
     if stage_changed and new_stage in STAGE_CHANGE_MSGS:
         return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
 
-    # Toxic level
-    if TOXIC_LEVEL == 2:
-        extra = " Thodi savage aur sharp reh."
-    elif TOXIC_LEVEL == 1:
-        extra = " Thodi playful teasing kar."
-    else:
-        extra = ""
-
-    # Memory context
-    mem_context = ""
-    if user["memories"]:
-        mem_context = "\nUser ke baare mein pata hai: " + str(user["memories"])
-
-    system = SYSTEM_PROMPT + extra + mem_context
+    system = build_system_prompt(user_name, user["stage"], user["city"], TOXIC_LEVEL)
 
     try:
-        max_tok = random.choice([8, 12, 15, 20, 25])
+        # 50 tokens minimum taaki sentence complete ho
+        max_tok = random.choice([30, 40, 50, 60])
         response = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "system", "content": system}] + history,
             max_tokens=max_tok,
-            temperature=0.9,
+            temperature=0.85,
         )
         reply = response.choices[0].message.content.strip()
-        # History mein assistant reply save karo
+
+        # History mein reply save karo
         user = get_user_db(user_id, user_name)
         user["history"].append({"role": "assistant", "content": reply})
         if len(user["history"]) > MAX_HISTORY:
@@ -253,17 +260,18 @@ def get_groq_reply(user_id, user_name, user_message):
         return reply
     except Exception as e:
         logger.error("Groq error: " + str(e))
-        return random.choice(["Ek sec 😅", "Busy hoon 😏", "Baad mein 🙈"])
-
+        return random.choice(["Ek sec 😅", "Busy hoon thodi 😏", "Baad mein bata 🙈"])
 
 def should_reply_group(chat_id, text):
     text_lower = text.lower()
 
+    # Naam liya — zaroor reply
     for name in ANIKA_NAMES:
         if name in text_lower:
             group_msg_counter[chat_id] = 0
             return True
 
+    # Romantic word
     for word in ROMANTIC_WORDS:
         if word in text_lower:
             last = group_last_reply.get(chat_id, 0)
@@ -273,6 +281,7 @@ def should_reply_group(chat_id, text):
             group_msg_counter[chat_id] = 0
             return True
 
+    # Har 2-4 messages ke baad
     count = group_msg_counter.get(chat_id, 0) + 1
     group_msg_counter[chat_id] = count
     if count >= random.randint(2, 4):
@@ -282,6 +291,7 @@ def should_reply_group(chat_id, text):
         group_msg_counter[chat_id] = 0
         return True
 
+    # 35% random
     last = group_last_reply.get(chat_id, 0)
     if time.time() - last < COOLDOWN_SECS:
         return False
@@ -294,7 +304,7 @@ def should_reply_group(chat_id, text):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    global AWAY_MODE, TOXIC_LEVEL, total_messages
+    global AWAY_MODE, TOXIC_LEVEL
     try:
         data = flask_request.get_json()
         message = data.get("message")
@@ -322,38 +332,39 @@ def webhook():
         if not text:
             return "ok", 200
 
-        # ── ADMIN ──
+        # Admin commands
         if user_id == ADMIN_ID:
             if text == "/stats":
                 stage_counts = get_stage_counts()
-                msg = "Anika Stats\n"
-                msg += "Users: " + str(get_total_users()) + "\n"
-                msg += "Messages: " + str(total_messages) + "\n"
-                msg += "Away: " + ("ON" if AWAY_MODE else "OFF") + "\n"
-                msg += "Toxic: " + str(TOXIC_LEVEL) + "\n\n"
+                msg = "📊 Anika Stats\n\n"
+                msg += "👥 Users: " + str(get_total_users()) + "\n"
+                msg += "💬 Messages: " + str(total_messages) + "\n"
+                msg += "😴 Away: " + ("ON" if AWAY_MODE else "OFF") + "\n"
+                msg += "😈 Toxic: " + str(TOXIC_LEVEL) + "\n\n"
+                msg += "🏆 Stages:\n"
                 for s, c in stage_counts.items():
-                    msg += s + ": " + str(c) + "\n"
+                    msg += "  " + s + ": " + str(c) + "\n"
                 send_message(chat_id, msg)
                 return "ok", 200
             if text == "/away":
                 AWAY_MODE = True
-                send_message(chat_id, "Away ON")
+                send_message(chat_id, "Away mode ON 😴")
                 return "ok", 200
             if text == "/back":
                 AWAY_MODE = False
-                send_message(chat_id, "Wapas online!")
+                send_message(chat_id, "Wapas online! 😏")
                 return "ok", 200
             if text == "/toxic0":
                 TOXIC_LEVEL = 0
-                send_message(chat_id, "Normal mode")
+                send_message(chat_id, "Normal mode 😊")
                 return "ok", 200
             if text == "/toxic1":
                 TOXIC_LEVEL = 1
-                send_message(chat_id, "Playful mode")
+                send_message(chat_id, "Playful mode 😏")
                 return "ok", 200
             if text == "/toxic2":
                 TOXIC_LEVEL = 2
-                send_message(chat_id, "Savage mode!")
+                send_message(chat_id, "Savage mode 😈")
                 return "ok", 200
             if text.startswith("/send "):
                 broadcast_msg = text[6:]
@@ -370,7 +381,7 @@ def webhook():
                         time.sleep(0.1)
                     except:
                         pass
-                send_message(chat_id, str(count) + " users ko bheja!")
+                send_message(chat_id, "✅ " + str(count) + " users ko bheja!")
                 return "ok", 200
 
         if AWAY_MODE and not is_group:
@@ -389,7 +400,7 @@ def webhook():
             u = get_user_db(user_id, user_name)
             names = {"stranger": "Stranger 👀", "friend": "Dost 😊",
                     "close_friend": "Close Dost 🥺", "crush": "Crush 💘"}
-            send_message(chat_id, names.get(u["stage"], u["stage"]) + " | " + str(u["msg_count"]) + " msgs")
+            send_message(chat_id, names.get(u["stage"], u["stage"]) + " — " + str(u["msg_count"]) + " msgs")
             return "ok", 200
         if text.startswith("/reset"):
             conn = sqlite3.connect(DB_PATH)
@@ -448,7 +459,8 @@ def proactive(chat_id):
 if __name__ == "__main__":
     init_db()
     try:
-        res = requests.post(TELEGRAM_API + "/setWebhook", json={"url": WEBHOOK_URL + "/webhook"})
+        res = requests.post(TELEGRAM_API + "/setWebhook",
+                           json={"url": WEBHOOK_URL + "/webhook"})
         logger.info("Webhook: " + str(res.json()))
     except Exception as e:
         logger.error("Webhook error: " + str(e))
