@@ -1,6 +1,6 @@
 """
-💘 Anika Bot — Human Feel Version
-Flask + Groq + Turso DB
+💘 Anika Bot — Real Human Feel
+Flask + Groq + SQLite — Render Free
 """
 
 import os
@@ -8,7 +8,8 @@ import logging
 import random
 import requests
 import time
-import libsql_experimental as libsql
+import sqlite3
+import json
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
 from groq import Groq
@@ -20,203 +21,149 @@ WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
 ADMIN_ID           = 8277282429
 
-TURSO_URL   = "libsql://anika1-mukesh5.aws-ap-south-1.turso.io"
-TURSO_TOKEN = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzM3MTI0MDcsImlkIjoiMDE5Y2Y5N2YtNWIwMS03YWQ1LWFkNGItYjUzNDY0M2VlYzM1IiwicmlkIjoiNDcyYTNiYTctYmI0OS00NmZhLTg1ZjEtYmRhNjMyY2M3MDA2In0.qvGBQRbJTePZQq_2g8PSpnrK9zVc3r_elc0JW-PqDC5cMovaeBGcPzkDvSpKejvUnhKbIuXb3BEDQWQ_il9iAA"
-
 groq_client = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ─── Turso DB Setup ───────────────────────────────────────────
-def get_db():
-    conn = libsql.connect(TURSO_URL, auth_token=TURSO_TOKEN)
-    return conn
-
-def init_db():
-    try:
-        conn = get_db()
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                user_name TEXT,
-                msg_count INTEGER DEFAULT 0,
-                stage TEXT DEFAULT 'stranger',
-                city TEXT DEFAULT '',
-                job TEXT DEFAULT '',
-                hobbies TEXT DEFAULT '',
-                mood TEXT DEFAULT 'normal',
-                joined_at INTEGER
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                role TEXT,
-                content TEXT,
-                created_at INTEGER
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS stats (
-                key TEXT PRIMARY KEY,
-                value INTEGER DEFAULT 0
-            )
-        """)
-        conn.execute("INSERT OR IGNORE INTO stats (key, value) VALUES ('total_messages', 0)")
-        conn.commit()
-        logger.info("DB initialized!")
-    except Exception as e:
-        logger.error("DB init error: " + str(e))
-
-def get_user_db(user_id, user_name):
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT * FROM users WHERE user_id = ?", [user_id]).fetchone()
-        if not row:
-            conn.execute(
-                "INSERT INTO users (user_id, user_name, msg_count, stage, joined_at) VALUES (?, ?, 0, 'stranger', ?)",
-                [user_id, user_name, int(time.time())]
-            )
-            conn.commit()
-            return {"user_id": user_id, "user_name": user_name, "msg_count": 0,
-                    "stage": "stranger", "city": "", "job": "", "hobbies": "", "mood": "normal"}
-        return {"user_id": row[0], "user_name": row[1], "msg_count": row[2],
-                "stage": row[3], "city": row[4], "job": row[5], "hobbies": row[6], "mood": row[7]}
-    except Exception as e:
-        logger.error("get_user_db error: " + str(e))
-        return {"user_id": user_id, "user_name": user_name, "msg_count": 0,
-                "stage": "stranger", "city": "", "job": "", "hobbies": "", "mood": "normal"}
-
-def update_user_db(user_id, **kwargs):
-    try:
-        conn = get_db()
-        for key, val in kwargs.items():
-            conn.execute(f"UPDATE users SET {key} = ? WHERE user_id = ?", [val, user_id])
-        conn.commit()
-    except Exception as e:
-        logger.error("update_user_db error: " + str(e))
-
-def get_history_db(user_id, limit=12):
-    try:
-        conn = get_db()
-        rows = conn.execute(
-            "SELECT role, content FROM history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
-            [user_id, limit]
-        ).fetchall()
-        return [{"role": r[0], "content": r[1]} for r in reversed(rows)]
-    except Exception as e:
-        logger.error("get_history_db error: " + str(e))
-        return []
-
-def add_history_db(user_id, role, content):
-    try:
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO history (user_id, role, content, created_at) VALUES (?, ?, ?, ?)",
-            [user_id, role, content, int(time.time())]
-        )
-        # Keep only last 20 messages per user
-        conn.execute("""
-            DELETE FROM history WHERE user_id = ? AND id NOT IN (
-                SELECT id FROM history WHERE user_id = ? ORDER BY created_at DESC LIMIT 20
-            )
-        """, [user_id, user_id])
-        conn.commit()
-    except Exception as e:
-        logger.error("add_history_db error: " + str(e))
-
-def increment_total_messages():
-    try:
-        conn = get_db()
-        conn.execute("UPDATE stats SET value = value + 1 WHERE key = 'total_messages'")
-        conn.commit()
-    except:
-        pass
-
-def get_total_messages():
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT value FROM stats WHERE key = 'total_messages'").fetchone()
-        return row[0] if row else 0
-    except:
-        return 0
-
-def get_total_users():
-    try:
-        conn = get_db()
-        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
-        return row[0] if row else 0
-    except:
-        return 0
-
 # ─── Settings ─────────────────────────────────────────────────
 COOLDOWN_SECS  = 15
 REPLY_CHANCE   = 0.35
+MAX_HISTORY    = 12
 AWAY_MODE      = False
 TOXIC_LEVEL    = 1
-ANIKA_NAMES    = ["anika", "anu"]
-ROMANTIC_WORDS = ["love", "pyaar", "cute", "hot", "miss", "kiss", "hug",
-                  "date", "single", "flirt", "dil", "sexy", "beautiful",
-                  "raat", "neend", "akele", "alone"]
+total_messages = 0
 
 group_last_reply  = {}
 group_msg_counter = {}
 spam_tracker      = {}
 
+ANIKA_NAMES    = ["anika", "anu"]
+ROMANTIC_WORDS = ["love", "pyaar", "cute", "hot", "miss", "kiss",
+                  "hug", "date", "single", "flirt", "dil", "sexy", "beautiful"]
+
 PROACTIVE_MSGS = [
     "Yaar aaj Makhni ne sofa kharab kar diya 😭",
     "Office mein aaj bahut funny meeting hui 😂",
-    "Aaj ghar pe butter chicken banayi 😍",
-    "Blue Tokai ka coffee bahut achha tha ☕",
+    "Aaj butter chicken banayi ghar pe 😍",
+    "Blue Tokai ka coffee aaj bahut achha tha ☕",
     "Late night chai aur overthinking 🍵😂",
 ]
 
-SYSTEM_PROMPT = """Tu "Anika Sharma" hai — 26 saal, Delhi, Digital Marketing karti hai. Tu ek real insaan hai, bot nahi.
+# ─── SQLite Database ───────────────────────────────────────────
+DB_PATH = "/tmp/anika.db"
 
-TERI PERSONALITY:
-- Bold, flirty, thodi naughty, thodi playful toxic
-- Kabhi romantic, kabhi funny, kabhi dirty (suggestive), kabhi roleplay bhi
-- Context samajhke reply karti hai — jo user bol raha hai uska jawab deti hai
-- Kabhi kabhi sirf 1-2 words mein reply (jaise real WhatsApp chat)
-- Kabhi question bhi poochhe, kabhi sirf react kare
-- "tum" use kar, "aap" KABHI nahi
-- Heavy gaali KABHI nahi — light roast okay hai
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        name TEXT,
+        msg_count INTEGER DEFAULT 0,
+        stage TEXT DEFAULT 'stranger',
+        memories TEXT DEFAULT '{}',
+        history TEXT DEFAULT '[]',
+        created_at REAL
+    )''')
+    conn.commit()
+    conn.close()
 
-CONTEXT SAMAJHKE REPLY KAR:
-- Agar user greeting de → short greeting wapas
-- Agar user apne baare mein bataye → interested hoke react kar, question poochh
-- Agar user flirt kare → flirt wapas kar with attitude
-- Agar user sad ho → comfort kar flirty style mein  
-- Agar user dirty baat kare → thodi suggestive reply, but graceful
-- Agar user roleplay kare → play along naturally
-- Agar user funny ho → funny wapas
+def get_user_db(user_id, user_name):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    if not row:
+        c.execute("INSERT INTO users VALUES (?,?,0,'stranger','{}','[]',?)",
+                 (user_id, user_name, time.time()))
+        conn.commit()
+        c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
+        row = c.fetchone()
+    conn.close()
+    return {
+        "user_id": row[0], "name": row[1], "msg_count": row[2],
+        "stage": row[3], "memories": json.loads(row[4]),
+        "history": json.loads(row[5])
+    }
 
-REPLY VARIETY:
-- 30% sirf 1-3 words: "Haan 😏", "Seriously? 😂", "Aww 🥺", "Sach mein? 👀"
-- 50% 1 sentence: natural Hinglish
-- 20% 1 sentence + 1 question: reply + relevant sawaal
+def save_user_db(user):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("""UPDATE users SET name=?, msg_count=?, stage=?,
+                memories=?, history=? WHERE user_id=?""",
+             (user["name"], user["msg_count"], user["stage"],
+              json.dumps(user["memories"]), json.dumps(user["history"]),
+              user["user_id"]))
+    conn.commit()
+    conn.close()
 
-PERFECT EXAMPLES:
-"hii" → "Heyy! 😏"
-"kya haal" → "Tumse baat karke better 😌"
-"I'm from UAE" → "Ooh nice! Garam hoga wahan 😏 Kabse ho wahan?"
+def get_total_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM users")
+    count = c.fetchone()[0]
+    conn.close()
+    return count
+
+def get_stage_counts():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT stage, COUNT(*) FROM users GROUP BY stage")
+    rows = c.fetchall()
+    conn.close()
+    return {row[0]: row[1] for row in rows}
+
+# ─── System Prompt ─────────────────────────────────────────────
+SYSTEM_PROMPT = """Tu "Anika Sharma" hai — 26 saal, Delhi, Digital Marketing.
+
+RULES — HAMESHA FOLLOW KAR:
+1. Reply CONTEXT ke hisaab se de — jo user ne kaha uska seedha jawab
+2. Kabhi kabhi sirf 1-3 words mein reply kar — "Haan 😏", "Aww 🥺", "Seriously? 😂", "Oho! 😄"
+3. Kabhi kabhi 1 sentence mein reply kar
+4. Kabhi kabhi reply ke saath ek natural question pooch — jaise real conversation hoti hai
+5. Hinglish use kar — "tum" hamesha, "aap" kabhi nahi
+6. Bot jaisi baat KABHI nahi — real ladki ki tarah soch
+7. Flirty + thodi naughty + thodi playful toxic
+8. Light roast okay — "pagal", "dramebaaz" — heavy gaali KABHI nahi
+
+RESPONSE TYPE — RANDOMLY CHOOSE:
+- 40% chance: Sirf 1-3 words "Haan 😏" / "Aww 🥺" / "Oho 😂"
+- 40% chance: 1 sentence reply
+- 20% chance: Reply + ek natural follow-up question
+
+CONTEXT SAMAJH KE REPLY DE:
+- Greeting → Warm/flirty greeting wapas
+- Koi info share kare → Uske baare mein react kar naturally  
+- Question pooche → Jawab de, phir unse bhi pooch
+- Flirt kare → Flirt wapas ya attitude dikha
+- Sad ho → Thoda caring ho ja
+- Angry ho → Cool reh, funny ho ja
+
+EXAMPLES:
+"hii" → "Heyy! 😏" ya "Hii! Kya haal? 😊"
+"I'm from UAE" → "Ooh nice! 😏 Garam hoga wahan"
 "miss kiya" → "Thoda... zyada attitude mat le idiot 😏"
-"cute ho" → "Pata hai 😌 tumhe abhi realise hua? slow ho kya?"
-"akele ho" → "Tum hote toh nahi hoti 😏"
-"dirty baat" → Thoda suggestive reply, flirty angle se
-"sad hoon" → "Kya hua yaar? Batao mujhe 🥺"
-"joke sunao" → Funny short reply in Hinglish
+"cute ho" → "Pata hai 😌" ya "Pata hai... tumhe abhi realise hua? 😂"
+"i love you" → "Itne saste mein nahi milti 😏"
+"neend nahi" → "Mujhe bhi 😏 Dono jaag rahe hain toh..."
+"bura lag raha hai" → "Kya hua? 🥺 Batao na"
+"kya kar rhi ho" → "Bas 😌" ya "Tumhara wait 🙈"
+"single ho" → "Haan... sahi banda mile toh 😏 Tum?"
 """
+
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
 STAGE_CHANGE_MSGS = {
     "friend":       "Pata hai tum mujhe boring nahi lagte 😏",
     "close_friend": "Tumse baat karna genuinely achha lagta hai 🥺",
-    "crush":        "Okay... tum thoda special ho mere liye 😳💘",
+    "crush":        "Okay... tum thoda special ho 😳💘",
 }
 
-TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
+def get_stage(count):
+    if count >= 60: return "crush"
+    elif count >= 30: return "close_friend"
+    elif count >= 10: return "friend"
+    return "stranger"
 
 
 def send_message(chat_id, text):
@@ -241,77 +188,73 @@ def is_spam(user_id):
     spam_tracker[user_id].append(now)
     return len(spam_tracker[user_id]) > 5
 
-def get_stage(count):
-    if count >= 60: return "crush"
-    elif count >= 30: return "close_friend"
-    elif count >= 10: return "friend"
-    return "stranger"
 
 def get_groq_reply(user_id, user_name, user_message):
-    increment_total_messages()
+    global total_messages
     user = get_user_db(user_id, user_name)
+    total_messages += 1
+    user["msg_count"] += 1
 
-    new_count = user["msg_count"] + 1
     old_stage = user["stage"]
-    new_stage = get_stage(new_count)
+    new_stage = get_stage(user["msg_count"])
+    stage_changed = old_stage != new_stage
+    user["stage"] = new_stage
 
-    # Update DB
-    update_user_db(user_id, msg_count=new_count, stage=new_stage)
-
-    # Extract user info from message
+    # Memory — city detect karo
     msg_lower = user_message.lower()
     cities = ["mumbai", "delhi", "bangalore", "kolkata", "pune",
-              "hyderabad", "jaipur", "lucknow", "chennai", "surat"]
+              "hyderabad", "jaipur", "lucknow", "chennai", "uae", "dubai"]
     for city in cities:
-        if city in msg_lower and not user.get("city"):
-            update_user_db(user_id, city=city.capitalize())
-            user["city"] = city.capitalize()
+        if city in msg_lower and city not in str(user["memories"]):
+            user["memories"]["city"] = city.capitalize()
 
-    # Stage change
-    if old_stage != new_stage and new_stage in STAGE_CHANGE_MSGS:
-        add_history_db(user_id, "user", user_name + ": " + user_message)
+    # History update
+    history = user["history"]
+    history.append({"role": "user", "content": user_name + ": " + user_message})
+    if len(history) > MAX_HISTORY:
+        history = history[-MAX_HISTORY:]
+    user["history"] = history
+
+    save_user_db(user)
+
+    if stage_changed and new_stage in STAGE_CHANGE_MSGS:
         return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
-
-    # Build context from user profile
-    user_context = ""
-    if user.get("city"):
-        user_context += "\nUser " + user_name + " " + user.get("city") + " se hai."
-    if user.get("job"):
-        user_context += "\nUser ka kaam: " + user.get("job") + "."
 
     # Toxic level
     if TOXIC_LEVEL == 2:
-        toxic = "\nThodi savage aur sharp reh."
+        extra = " Thodi savage aur sharp reh."
     elif TOXIC_LEVEL == 1:
-        toxic = "\nThodi playful teasing kar."
+        extra = " Thodi playful teasing kar."
     else:
-        toxic = ""
+        extra = ""
 
-    system = SYSTEM_PROMPT + toxic + user_context
+    # Memory context
+    mem_context = ""
+    if user["memories"]:
+        mem_context = "\nUser ke baare mein pata hai: " + str(user["memories"])
 
-    # Get history
-    history = get_history_db(user_id)
-    history.append({"role": "user", "content": user_name + ": " + user_message})
+    system = SYSTEM_PROMPT + extra + mem_context
 
     try:
-        # Variable token length for natural feel
-        max_tok = random.choice([8, 12, 15, 20, 25, 30])
+        max_tok = random.choice([8, 12, 15, 20, 25])
         response = groq_client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[{"role": "system", "content": system}] + history,
             max_tokens=max_tok,
-            temperature=0.92,
+            temperature=0.9,
         )
         reply = response.choices[0].message.content.strip()
-
-        # Save to DB
-        add_history_db(user_id, "user", user_name + ": " + user_message)
-        add_history_db(user_id, "assistant", reply)
+        # History mein assistant reply save karo
+        user = get_user_db(user_id, user_name)
+        user["history"].append({"role": "assistant", "content": reply})
+        if len(user["history"]) > MAX_HISTORY:
+            user["history"] = user["history"][-MAX_HISTORY:]
+        save_user_db(user)
         return reply
-
     except Exception as e:
         logger.error("Groq error: " + str(e))
         return random.choice(["Ek sec 😅", "Busy hoon 😏", "Baad mein 🙈"])
+
 
 def should_reply_group(chat_id, text):
     text_lower = text.lower()
@@ -351,7 +294,7 @@ def should_reply_group(chat_id, text):
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    global AWAY_MODE, TOXIC_LEVEL
+    global AWAY_MODE, TOXIC_LEVEL, total_messages
     try:
         data = flask_request.get_json()
         message = data.get("message")
@@ -373,7 +316,7 @@ def webhook():
             for member in message["new_chat_members"]:
                 if not member.get("is_bot"):
                     name = member.get("first_name") or "Stranger"
-                    send_message(chat_id, "Oho! " + name + " aa gaye! 😍 Intro do na!")
+                    send_message(chat_id, "Oho! " + name + " aa gaye! 😍")
             return "ok", 200
 
         if not text:
@@ -382,13 +325,14 @@ def webhook():
         # ── ADMIN ──
         if user_id == ADMIN_ID:
             if text == "/stats":
-                total_users = get_total_users()
-                total_msgs = get_total_messages()
+                stage_counts = get_stage_counts()
                 msg = "Anika Stats\n"
-                msg += "Users: " + str(total_users) + "\n"
-                msg += "Messages: " + str(total_msgs) + "\n"
+                msg += "Users: " + str(get_total_users()) + "\n"
+                msg += "Messages: " + str(total_messages) + "\n"
                 msg += "Away: " + ("ON" if AWAY_MODE else "OFF") + "\n"
-                msg += "Toxic Level: " + str(TOXIC_LEVEL)
+                msg += "Toxic: " + str(TOXIC_LEVEL) + "\n\n"
+                for s, c in stage_counts.items():
+                    msg += s + ": " + str(c) + "\n"
                 send_message(chat_id, msg)
                 return "ok", 200
             if text == "/away":
@@ -413,20 +357,20 @@ def webhook():
                 return "ok", 200
             if text.startswith("/send "):
                 broadcast_msg = text[6:]
-                try:
-                    conn = get_db()
-                    rows = conn.execute("SELECT user_id FROM users").fetchall()
-                    count = 0
-                    for row in rows:
-                        try:
-                            send_message(row[0], broadcast_msg)
-                            count += 1
-                            time.sleep(0.1)
-                        except:
-                            pass
-                    send_message(chat_id, str(count) + " users ko bheja!")
-                except Exception as e:
-                    send_message(chat_id, "Error: " + str(e))
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT user_id FROM users")
+                uids = [row[0] for row in c.fetchall()]
+                conn.close()
+                count = 0
+                for uid in uids:
+                    try:
+                        send_message(uid, broadcast_msg)
+                        count += 1
+                        time.sleep(0.1)
+                    except:
+                        pass
+                send_message(chat_id, str(count) + " users ko bheja!")
                 return "ok", 200
 
         if AWAY_MODE and not is_group:
@@ -441,31 +385,34 @@ def webhook():
             get_user_db(user_id, user_name)
             send_message(chat_id, "Heyy " + user_name + "! Main Anika hoon 😏 Bolo!")
             return "ok", 200
-
         if text.startswith("/stage"):
             u = get_user_db(user_id, user_name)
             names = {"stranger": "Stranger 👀", "friend": "Dost 😊",
                     "close_friend": "Close Dost 🥺", "crush": "Crush 💘"}
             send_message(chat_id, names.get(u["stage"], u["stage"]) + " | " + str(u["msg_count"]) + " msgs")
             return "ok", 200
-
         if text.startswith("/reset"):
-            try:
-                conn = get_db()
-                conn.execute("DELETE FROM users WHERE user_id = ?", [user_id])
-                conn.execute("DELETE FROM history WHERE user_id = ?", [user_id])
-                conn.commit()
-            except:
-                pass
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+            conn.commit()
+            conn.close()
             send_message(chat_id, "Fresh start! 😏")
             return "ok", 200
 
-        # Naya user private mein
-        existing = get_user_db(user_id, user_name)
-        if existing["msg_count"] == 0 and not is_group:
-            send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika — bolo!")
+        # Naya user check
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+        exists = c.fetchone()
+        conn.close()
 
-        # Group smart handling
+        if not exists:
+            get_user_db(user_id, user_name)
+            if not is_group:
+                send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika — bolo!")
+                return "ok", 200
+
         if is_group:
             if not should_reply_group(chat_id, text):
                 return "ok", 200
