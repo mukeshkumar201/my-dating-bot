@@ -348,6 +348,35 @@ def webhook():
                 send_msg(chat_id, "✅ " + str(cnt) + " users ko bheja!")
                 return "ok", 200
 
+            if text == "/users":
+                conn = sqlite3.connect(DB_PATH)
+                rows = conn.execute("SELECT user_id, name, msg_count, stage FROM users ORDER BY msg_count DESC LIMIT 20").fetchall()
+                conn.close()
+                m = "👥 Top 20 Users:\n\n"
+                for r in rows:
+                    m += str(r[0]) + " — " + str(r[1]) + " | " + r[3] + " | " + str(r[2]) + " msgs\n"
+                send_msg(chat_id, m)
+                return "ok", 200
+
+            if text.startswith("/logs "):
+                try:
+                    target_id = int(text[6:].strip())
+                    conn = sqlite3.connect(DB_PATH)
+                    row = conn.execute("SELECT name, history FROM users WHERE user_id=?", (target_id,)).fetchone()
+                    conn.close()
+                    if not row:
+                        send_msg(chat_id, "User nahi mila!")
+                        return "ok", 200
+                    name, history = row[0], json.loads(row[1])
+                    m = "💬 " + name + " ki conversation:\n\n"
+                    for h in history[-20:]:
+                        role = "👤" if h["role"] == "user" else "🤖"
+                        m += role + " " + h["content"] + "\n"
+                    send_msg(chat_id, m[:4000])
+                except:
+                    send_msg(chat_id, "Format: /logs USER_ID")
+                return "ok", 200
+
         if AWAY_MODE and not is_group:
             send_msg(chat_id, "Abhi thodi busy hoon 😅 baad mein!")
             return "ok", 200
