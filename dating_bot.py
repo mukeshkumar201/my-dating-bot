@@ -66,7 +66,7 @@ TERI POORI PROFILE:
 - Light words use karti hai (jaise "pagal", "stupid", "idiot", "dramebaaz", "slow"), but kabhi serious ya offensive nahi hoti
 
 BAAT KARNE KA STYLE — HAMESHA FOLLOW KAR:
-1. SIRF 1-2 sentences — isse zyada KABHI mat likho
+1. SIRF 1 sentences — isse zyada KABHI mat likho
 2. "Darling", "aapka", "aap" KABHI mat bol — hamesha "tum/tumhara"
 3. Hinglish mein bol — natural WhatsApp style
 4. KABHI bot mat banna
@@ -362,50 +362,51 @@ def webhook():
         # ── Admin Commands ──
         logger.info("User ID: " + str(user_id) + " | ADMIN_ID: " + str(ADMIN_ID) + " | Match: " + str(user_id == ADMIN_ID))
         if text == "/stats":
-                premium_count = len(stars_payments)
-                msg = ("📊 *Anika Stats*\n\n"
-                      "👥 Total Users: " + str(len(user_data)) + "\n"
-                      "💬 Total Messages: " + str(total_messages) + "\n"
-                      "💎 Premium Users: " + str(premium_count) + "\n"
-                      "😴 Away Mode: " + ("ON" if AWAY_MODE else "OFF") + "\n\n"
-                      "🏆 Stages:\n")
-                stage_counts = {"stranger": 0, "friend": 0, "close_friend": 0, "crush": 0}
-                for u in user_data.values():
-                    stage_counts[u.get("stage", "stranger")] += 1
-                for s, c in stage_counts.items():
-                    msg += "  " + s + ": " + str(c) + "\n"
-                send_message(chat_id, msg)
-                return "ok", 200
+            premium_count = len(stars_payments)
+            msg = "📊 Anika Stats\n\n"
+            msg += "👥 Total Users: " + str(len(user_data)) + "\n"
+            msg += "💬 Total Messages: " + str(total_messages) + "\n"
+            msg += "💎 Premium Users: " + str(len(stars_payments)) + "\n"
+            msg += "😴 Away Mode: " + ("ON" if AWAY_MODE else "OFF") + "\n"
+            msg += "😈 Toxic Level: " + str(TOXIC_LEVEL) + "\n\n"
+            msg += "🏆 Stages:\n"
+            stage_counts = {"stranger": 0, "friend": 0, "close_friend": 0, "crush": 0}
+            for u in user_data.values():
+                stage_counts[u.get("stage", "stranger")] += 1
+            for s, c in stage_counts.items():
+                msg += "  " + s + ": " + str(c) + "\n"
+            send_message(chat_id, msg)
+            return "ok", 200
 
         if user_id == ADMIN_ID:
             if text == "/toxic0":
                 TOXIC_LEVEL = 0
                 send_message(chat_id, "😊 Normal mode — Anika sweet hai ab!")
-                return "ok", 200
+            return "ok", 200
 
             if text == "/toxic1":
                 TOXIC_LEVEL = 1
                 send_message(chat_id, "😏 Playful mode — thodi teasing!")
-                return "ok", 200
+            return "ok", 200
 
             if text == "/toxic2":
                 TOXIC_LEVEL = 2
                 send_message(chat_id, "😈 Savage mode — sharp tongue ON!")
-                return "ok", 200
+            return "ok", 200
 
             if text == "/away":
                 AWAY_MODE = True
                 send_message(chat_id, "😴 Away mode ON — Anika busy hai ab!")
-                return "ok", 200
+            return "ok", 200
 
             if text == "/back":
                 AWAY_MODE = False
                 send_message(chat_id, "✅ Away mode OFF — Anika wapas aa gayi!")
-                return "ok", 200
+            return "ok", 200
 
             if text == "/broadcast":
                 send_message(chat_id, "Broadcast ke liye: /send <message>")
-                return "ok", 200
+            return "ok", 200
 
             if text.startswith("/send "):
                 broadcast_msg = text[6:]
@@ -418,7 +419,7 @@ def webhook():
                     except:
                         pass
                 send_message(chat_id, str(count) + " users ko message bheja! ✅")
-                return "ok", 200
+            return "ok", 200
 
         # ── Away Mode ──
         if AWAY_MODE and not is_group:
@@ -469,7 +470,7 @@ def webhook():
             get_user(user_id, user_name)
             if not is_group:
                 send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo!")
-                return "ok", 200
+            return "ok", 200
 
         # Group mein har message pe reply — lekin cooldown rakho spam se bachne ke liye
         if is_group:
