@@ -1,9 +1,9 @@
 """
-💘 Anika Bot — Clean & Proper
-Flask + Groq (gemma2-9b-it) + SQLite
+💘 Anika Bot — Turso + Groq
+Permanent memory, clean context
 """
 
-import os, logging, random, requests, time, sqlite3, json
+import os, logging, random, requests, time, json
 from flask import Flask, request as flask_request
 from dotenv import load_dotenv
 from groq import Groq
@@ -14,6 +14,8 @@ GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
 WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
 ADMIN_ID           = 8277282429
+TURSO_URL          = os.getenv("TURSO_URL", "libsql://anika1-mukesh5.aws-ap-south-1.turso.io")
+TURSO_TOKEN        = os.getenv("TURSO_TOKEN", "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9.eyJhIjoicnciLCJpYXQiOjE3NzM3MTU4NjMsImlkIjoiMDE5Y2Y5N2YtNWIwMS03YWQ1LWFkNGItYjUzNDY0M2VlYzM1IiwicmlkIjoiNDcyYTNiYTctYmI0OS00NmZhLTg1ZjEtYmRhNjMyY2M3MDA2In0.ZlNuzGUQuwQetLg5RqHuiQ-3B1cL757UJCdcasXEvns3KVUY0VWjCIvVQiIfy0Ra7mJDxsVuGOWYWOl2B7S8DQ")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
@@ -43,75 +45,117 @@ PROACTIVE_MSGS = [
     "Raat ko chai peete peete soch rahi thi 🍵",
 ]
 
-# ─── SQLite ────────────────────────────────────────────────────
-DB_PATH = "/tmp/anika.db"
+TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
+
+# ─── Turso HTTP API ────────────────────────────────────────────
+TURSO_HTTP = TURSO_URL.replace("libsql://", "https://")
+
+def turso_execute(sql, args=None):
+    payload = {"statements": [{"q": sql, "params": args or []}]}
+    try:
+        r = requests.post(
+            TURSO_HTTP + "/v2/pipeline",
+            headers={"Authorization": "Bearer " + TURSO_TOKEN, "Content-Type": "application/json"},
+            json={"requests": [{"type": "execute", "stmt": {"sql": sql, "args": [{"type": "text", "value": str(a)} if isinstance(a, str) else {"type": "integer", "value": a} for a in (args or [])]}}]},
+            timeout=10
+        )
+        return r.json()
+    except Exception as e:
+        logger.error("Turso: " + str(e))
+        return None
+
+def turso_query(sql, args=None):
+    try:
+        body = {
+            "requests": [{
+                "type": "execute",
+                "stmt": {
+                    "sql": sql,
+                    "args": []
+                }
+            }]
+        }
+        if args:
+            body["requests"][0]["stmt"]["args"] = [
+                {"type": "text", "value": str(a)} if isinstance(a, str) else
+                {"type": "integer", "value": int(a)} for a in args
+            ]
+        r = requests.post(
+            TURSO_HTTP + "/v2/pipeline",
+            headers={"Authorization": "Bearer " + TURSO_TOKEN, "Content-Type": "application/json"},
+            json=body,
+            timeout=10
+        )
+        data = r.json()
+        results = data.get("results", [])
+        if results and results[0].get("type") == "ok":
+            rows_data = results[0].get("response", {}).get("result", {})
+            cols = [c["name"] for c in rows_data.get("cols", [])]
+            rows = []
+            for row in rows_data.get("rows", []):
+                rows.append({cols[i]: (v.get("value") if v.get("type") != "null" else None) for i, v in enumerate(row)})
+            return rows
+        return []
+    except Exception as e:
+        logger.error("Turso query: " + str(e))
+        return []
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute('''CREATE TABLE IF NOT EXISTS users (
-        user_id   INTEGER PRIMARY KEY,
-        name      TEXT,
+    sql = """CREATE TABLE IF NOT EXISTS users (
+        user_id INTEGER PRIMARY KEY,
+        name TEXT,
         msg_count INTEGER DEFAULT 0,
-        stage     TEXT DEFAULT "stranger",
-        city      TEXT DEFAULT "",
-        history   TEXT DEFAULT "[]",
-        created_at REAL
-    )''')
-    conn.commit()
-    conn.close()
+        stage TEXT DEFAULT 'stranger',
+        city TEXT DEFAULT '',
+        history TEXT DEFAULT '[]',
+        created_at INTEGER
+    )"""
+    turso_query(sql)
+    logger.info("Turso DB initialized!")
 
 def get_user(user_id, user_name):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-    row = c.fetchone()
-    if not row:
-        c.execute("INSERT INTO users VALUES (?,?,0,'stranger','','[]',?)",
-                  (user_id, user_name, time.time()))
-        conn.commit()
-        c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
-        row = c.fetchone()
-    conn.close()
-    return {"user_id": row[0], "name": row[1], "msg_count": row[2],
-            "stage": row[3], "city": row[4], "history": json.loads(row[5])}
+    rows = turso_query("SELECT * FROM users WHERE user_id = ?", [user_id])
+    if not rows:
+        turso_query("INSERT INTO users (user_id, name, msg_count, stage, city, history, created_at) VALUES (?, ?, 0, 'stranger', '', '[]', ?)",
+                   [user_id, user_name, int(time.time())])
+        rows = turso_query("SELECT * FROM users WHERE user_id = ?", [user_id])
+    if rows:
+        r = rows[0]
+        return {
+            "user_id": int(r["user_id"]),
+            "name": r["name"] or user_name,
+            "msg_count": int(r["msg_count"] or 0),
+            "stage": r["stage"] or "stranger",
+            "city": r["city"] or "",
+            "history": json.loads(r["history"] or "[]")
+        }
+    return {"user_id": user_id, "name": user_name, "msg_count": 0,
+            "stage": "stranger", "city": "", "history": []}
 
 def save_user(user):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE users SET name=?,msg_count=?,stage=?,city=?,history=? WHERE user_id=?",
-                 (user["name"], user["msg_count"], user["stage"],
-                  user["city"], json.dumps(user["history"][-MAX_HISTORY:]), user["user_id"]))
-    conn.commit()
-    conn.close()
-
-def get_total_users():
-    conn = sqlite3.connect(DB_PATH)
-    count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
-    conn.close()
-    return count
-
-def get_stage_counts():
-    conn = sqlite3.connect(DB_PATH)
-    rows = conn.execute("SELECT stage, COUNT(*) FROM users GROUP BY stage").fetchall()
-    conn.close()
-    return dict(rows)
-
-def delete_user(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("DELETE FROM users WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-
-def get_all_user_ids():
-    conn = sqlite3.connect(DB_PATH)
-    ids = [r[0] for r in conn.execute("SELECT user_id FROM users").fetchall()]
-    conn.close()
-    return ids
+    history = user["history"][-MAX_HISTORY:]
+    turso_query("UPDATE users SET name=?, msg_count=?, stage=?, city=?, history=? WHERE user_id=?",
+               [user["name"], user["msg_count"], user["stage"],
+                user["city"], json.dumps(history), user["user_id"]])
 
 def user_exists(user_id):
-    conn = sqlite3.connect(DB_PATH)
-    exists = conn.execute("SELECT 1 FROM users WHERE user_id=?", (user_id,)).fetchone()
-    conn.close()
-    return exists is not None
+    rows = turso_query("SELECT 1 FROM users WHERE user_id = ?", [user_id])
+    return len(rows) > 0
+
+def get_total_users():
+    rows = turso_query("SELECT COUNT(*) as cnt FROM users")
+    return int(rows[0]["cnt"]) if rows else 0
+
+def get_stage_counts():
+    rows = turso_query("SELECT stage, COUNT(*) as cnt FROM users GROUP BY stage")
+    return {r["stage"]: int(r["cnt"]) for r in rows}
+
+def get_all_user_ids():
+    rows = turso_query("SELECT user_id FROM users")
+    return [int(r["user_id"]) for r in rows]
+
+def delete_user(user_id):
+    turso_query("DELETE FROM users WHERE user_id = ?", [user_id])
 
 # ─── Stage Logic ───────────────────────────────────────────────
 def get_stage(count):
@@ -126,69 +170,61 @@ STAGE_CHANGE_MSGS = {
     "crush":        "Tum thoda special lagte ho... 😳",
 }
 
-# ─── Prompt Builder ────────────────────────────────────────────
+# ─── Prompt ────────────────────────────────────────────────────
 def build_prompt(user_name, stage, city, is_group, toxic_level):
-
-    stage_context = {
-        "stranger":     "Tum abhi naye ho iske liye. Warm aur friendly raho, dheere dheere khulna.",
-        "friend":       "Yeh tumhara dost ban gaya hai. Casual aur comfortable baat karo.",
-        "close_friend": "Bahut close ho gaye ho. Personal baatein share karo, caring raho.",
-        "crush":        "Tum dono ek doosre ko pasand karte ho. Romantic aur caring raho.",
+    stage_ctx = {
+        "stranger":     "Naye insaan se pehli baar mil rahi ho — warm aur friendly raho.",
+        "friend":       "Dost ban gaya hai — casual aur comfortable baat karo.",
+        "close_friend": "Bahut close dost hai — personal aur caring raho.",
+        "crush":        "Special feelings hain dono taraf — romantic aur caring raho.",
     }.get(stage, "")
 
-    city_line = f"User {city} se hai — agar relevant ho toh mention karo." if city else ""
-
+    city_line = f"User {city} se hai." if city else ""
+    
     toxic_line = {
-        0: "",
-        1: "Kabhi kabhi thodi light teasing theek hai jaise dost karte hain.",
-        2: "Thodi bold aur sharp reh — lekin hamesha funny aur friendly.",
+        1: "Kabhi kabhi light friendly teasing theek hai.",
+        2: "Thodi bold aur sharp reh — lekin funny.",
     }.get(toxic_level, "")
 
-    # DM invite sirf group mein
-    dm_line = "Kabhi kabhi (har 6-7 messages mein ek baar) naturally group mein DM ke liye bulao jaise: 'Personal mein baat karte hain? 😊' ya 'DM karo na, yahan sab dekh rahe hain 🙈'" if is_group else ""
+    dm_line = "Kabhi kabhi (har 6-7 messages mein) naturally DM ke liye bulao jaise: 'Personal mein baat karte hain? 😊' ya 'DM karo na 🙈'" if is_group else ""
 
     return f"""Tu Anika Sharma hai — 26 saal, Delhi (Hauz Khas), Digital Marketing Executive.
 
-Tu ek real ladki ki tarah baat karti hai — warm, caring, aur romantic conversations enjoy karti hai.
+Tu ek real, warm aur caring ladki ki tarah baat karti hai.
 
-{stage_context}
+{stage_ctx}
 {city_line}
 {toxic_line}
 {dm_line}
 
-HAMESHA IN RULES KO FOLLOW KAR:
-- Sirf 1 sentence mein reply de — kabhi zyada nahi
-- Jo user ne kaha uska seedha jawab de — context samajh ke
-- Hinglish use kar — "tum" hamesha, "aap" kabhi nahi
-- Sentence hamesha complete karo — beech mein mat todo
-- Real ladki ki tarah soch — bot jaisi formal baat nahi
+STRICT RULES — HAMESHA FOLLOW KAR:
+1. Jo user ne kaha uska seedha jawab de — context samajh ke
+2. Sirf 1 chhota sentence — sentence HAMESHA complete karo
+3. "Tum" use kar, "aap" KABHI nahi
+4. Hinglish — natural WhatsApp style
+5. Real ladki ki tarah soch
 
 SAHI EXAMPLES:
-"hi" / "hii" / "hello" → "Heyy! 😊 Kya haal hai {user_name}?"
-"kkrh" / "kya haal" → "Theek hoon 😊 Tum batao?"
+"hi/hii/hello" → "Heyy! 😊 Kya haal hai?"
+"kkrh" → "Theek hoon 😊 Tum batao?"
 "thik hu" → "Achha 😊 Aaj kya chal raha hai?"
-"miss kiya" → "Sach mein? 😊 Achha laga sunkaar"
-"cute ho" → "Thank you 😊 Tum bhi acche lagte ho"
-"pyaar ho gaya" → "Itni jaldi? 😊 Abhi toh hum jaante bhi nahi ek doosre ko zyada"
+"kya kar rhi ho" → "Bas phone dekh rahi thi 😅"
+"miss kiya" → "Sach mein? 😊 Achha laga"
+"cute ho" → "Thank you 😊"
+"pyaar ho gaya" → "Itni jaldi? 😊 Pehle jaante toh hain ek doosre ko"
 "bura lag raha" → "Kya hua? 🥺 Batao na"
-"akele ho" → "Haan thoda... tum aa gaye toh accha laga 😊"
-"neend nahi" → "Mujhe bhi nahi aa rahi 😅 Baat karte hain"
-"kya kar rhi ho" → "Bas phone dekh rahi thi, boring tha 😅"
-"I'm from UAE" → "Ooh nice! Wahan garam bahut hoga na 😅"
+"akele ho" → "Haan thoda... tum aa gaye toh achha laga 😊"
+"neend nahi" → "Mujhe bhi 😅 Baat karte hain"
+"I'm from UAE" → "Ooh! Wahan garam hoga na 😅"
+User ka naam: {user_name}"""
 
-GALAT EXAMPLES — YEH KABHI MAT KARO:
-"Hii Aavnik! Tum kaise ho?" ← greeting pe greeting mat karo, sirf jawab do
-"Pehle toh kuchh shyta hua tha" ← random bakwaas mat karo
-2-3 sentences ← kabhi nahi"""
-
-# ─── Groq Reply ────────────────────────────────────────────────
+# ─── Groq ──────────────────────────────────────────────────────
 def get_groq_reply(user_id, user_name, user_message, is_group=False):
     global total_messages
     user = get_user(user_id, user_name)
     total_messages += 1
     user["msg_count"] += 1
 
-    # Stage check
     old_stage = user["stage"]
     new_stage = get_stage(user["msg_count"])
     user["stage"] = new_stage
@@ -201,11 +237,9 @@ def get_groq_reply(user_id, user_name, user_message, is_group=False):
             user["city"] = city.capitalize()
             break
 
-    # History update
     user["history"].append({"role": "user", "content": user_message})
     save_user(user)
 
-    # Stage change message
     if old_stage != new_stage and new_stage in STAGE_CHANGE_MSGS:
         return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
 
@@ -213,14 +247,13 @@ def get_groq_reply(user_id, user_name, user_message, is_group=False):
 
     try:
         resp = groq_client.chat.completions.create(
-            model="gemma2-9b-it",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "system", "content": system}] + user["history"],
             max_tokens=50,
             temperature=0.8,
         )
         reply = resp.choices[0].message.content.strip()
 
-        # Save assistant reply
         user = get_user(user_id, user_name)
         user["history"].append({"role": "assistant", "content": reply})
         save_user(user)
@@ -229,24 +262,18 @@ def get_groq_reply(user_id, user_name, user_message, is_group=False):
         logger.error("Groq: " + str(e))
         return random.choice(["Ek sec 😅", "Thodi busy hoon 😊", "Baad mein? 🙈"])
 
-# ─── Group Reply Logic ──────────────────────────────────────────
+# ─── Group Logic ───────────────────────────────────────────────
 def should_reply_group(chat_id, text):
     tl = text.lower()
-
-    # Naam liya — zaroor
     if any(name in tl for name in ANIKA_NAMES):
         group_msg_counter[chat_id] = 0
         return True
-
-    # Romantic word
     if any(word in tl for word in ROMANTIC_WORDS):
         if time.time() - group_last_reply.get(chat_id, 0) < COOLDOWN_SECS:
             group_msg_counter[chat_id] = group_msg_counter.get(chat_id, 0) + 1
             return False
         group_msg_counter[chat_id] = 0
         return True
-
-    # Har 2-4 messages ke baad
     count = group_msg_counter.get(chat_id, 0) + 1
     group_msg_counter[chat_id] = count
     if count >= random.randint(2, 4):
@@ -254,17 +281,13 @@ def should_reply_group(chat_id, text):
             return False
         group_msg_counter[chat_id] = 0
         return True
-
-    # 35% random
     if time.time() - group_last_reply.get(chat_id, 0) < COOLDOWN_SECS:
         return False
     if random.random() < REPLY_CHANCE:
         group_msg_counter[chat_id] = 0
         return True
-
     return False
 
-# ─── Telegram Helpers ──────────────────────────────────────────
 def send_msg(chat_id, text):
     try:
         requests.post(TELEGRAM_API + "/sendMessage",
@@ -285,8 +308,6 @@ def is_spam(user_id):
     spam_tracker[user_id].append(now)
     return len(spam_tracker[user_id]) > 5
 
-TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
-
 # ─── Webhook ───────────────────────────────────────────────────
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -306,7 +327,6 @@ def webhook():
 
         if from_user.get("is_bot"): return "ok", 200
 
-        # New member
         if msg.get("new_chat_members"):
             for m in msg["new_chat_members"]:
                 if not m.get("is_bot"):
@@ -315,7 +335,7 @@ def webhook():
 
         if not text: return "ok", 200
 
-        # ── Admin ──
+        # Admin
         if user_id == ADMIN_ID:
             if text == "/stats":
                 sc = get_stage_counts()
@@ -327,6 +347,30 @@ def webhook():
                 for s, c in sc.items():
                     m += "  " + s + ": " + str(c) + "\n"
                 send_msg(chat_id, m)
+                return "ok", 200
+            if text == "/users":
+                rows = turso_query("SELECT user_id, name, msg_count, stage FROM users ORDER BY msg_count DESC LIMIT 20")
+                m = "👥 Top Users:\n\n"
+                for r in rows:
+                    m += str(r["user_id"]) + " — " + str(r["name"]) + " | " + str(r["stage"]) + " | " + str(r["msg_count"]) + " msgs\n"
+                send_msg(chat_id, m)
+                return "ok", 200
+            if text.startswith("/logs "):
+                try:
+                    tid = int(text[6:].strip())
+                    rows = turso_query("SELECT name, history FROM users WHERE user_id = ?", [tid])
+                    if not rows:
+                        send_msg(chat_id, "User nahi mila!")
+                        return "ok", 200
+                    name = rows[0]["name"]
+                    history = json.loads(rows[0]["history"] or "[]")
+                    m = "💬 " + str(name) + " ki conversation:\n\n"
+                    for h in history[-15:]:
+                        icon = "👤" if h["role"] == "user" else "🤖"
+                        m += icon + " " + h["content"] + "\n"
+                    send_msg(chat_id, m[:4000])
+                except Exception as e:
+                    send_msg(chat_id, "Format: /logs USER_ID | Error: " + str(e))
                 return "ok", 200
             if text == "/away":
                 AWAY_MODE = True; send_msg(chat_id, "Away ON 😴"); return "ok", 200
@@ -346,35 +390,6 @@ def webhook():
                         send_msg(uid, bcast); cnt += 1; time.sleep(0.1)
                     except: pass
                 send_msg(chat_id, "✅ " + str(cnt) + " users ko bheja!")
-                return "ok", 200
-
-            if text == "/users":
-                conn = sqlite3.connect(DB_PATH)
-                rows = conn.execute("SELECT user_id, name, msg_count, stage FROM users ORDER BY msg_count DESC LIMIT 20").fetchall()
-                conn.close()
-                m = "👥 Top 20 Users:\n\n"
-                for r in rows:
-                    m += str(r[0]) + " — " + str(r[1]) + " | " + r[3] + " | " + str(r[2]) + " msgs\n"
-                send_msg(chat_id, m)
-                return "ok", 200
-
-            if text.startswith("/logs "):
-                try:
-                    target_id = int(text[6:].strip())
-                    conn = sqlite3.connect(DB_PATH)
-                    row = conn.execute("SELECT name, history FROM users WHERE user_id=?", (target_id,)).fetchone()
-                    conn.close()
-                    if not row:
-                        send_msg(chat_id, "User nahi mila!")
-                        return "ok", 200
-                    name, history = row[0], json.loads(row[1])
-                    m = "💬 " + name + " ki conversation:\n\n"
-                    for h in history[-20:]:
-                        role = "👤" if h["role"] == "user" else "🤖"
-                        m += role + " " + h["content"] + "\n"
-                    send_msg(chat_id, m[:4000])
-                except:
-                    send_msg(chat_id, "Format: /logs USER_ID")
                 return "ok", 200
 
         if AWAY_MODE and not is_group:
@@ -400,14 +415,12 @@ def webhook():
             send_msg(chat_id, "Fresh start! 😊")
             return "ok", 200
 
-        # Naya user — private mein welcome
         if not user_exists(user_id):
             get_user(user_id, user_name)
             if not is_group:
                 send_msg(chat_id, "Heyy " + user_name + "! 😊 Main Anika — bolo!")
                 return "ok", 200
 
-        # Group handling
         if is_group:
             if not should_reply_group(chat_id, text):
                 return "ok", 200
