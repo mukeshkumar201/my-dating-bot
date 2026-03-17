@@ -239,10 +239,10 @@ def get_groq_reply(user_id, user_name, user_message):
         return "STAGE:" + STAGE_CHANGE_MSGS[new_stage]
 
     try:
-        token_choices = [5, 10, 15, 20, 25, 30]
+        token_choices = [15, 20, 25, 30, 35, 40]
         max_tok = random.choice(token_choices)
         response = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="llama-3.1-8b-instant",
             messages=[{"role": "system", "content": build_prompt(user_id, user_name)}] + user["history"],
             max_tokens=max_tok,
             temperature=0.9,
@@ -252,7 +252,13 @@ def get_groq_reply(user_id, user_name, user_message):
         return reply
     except Exception as e:
         logger.error("Groq error: " + str(e))
-        return "Yaar thodi net problem hai 😘"
+        errors = [
+            "Yaar ek sec 😅",
+            "Abhi busy hoon thodi 😏",
+            "Baad mein batati hoon 🙈",
+            "Ek min ruko na 😌",
+        ]
+        return random.choice(errors)
 
 
 # ─── Smart Group Reply ──────────────────────────────────────────
@@ -419,11 +425,12 @@ def webhook():
             send_message(chat_id, "Fresh start! ✨ Kya haal hai? 😏")
             return "ok", 200
 
-        # Naya user — auto welcome
+        # Naya user — auto welcome sirf private mein
         if user_id not in user_data:
             get_user(user_id, user_name)
-            send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo!")
-            return "ok", 200
+            if not is_group:
+                send_message(chat_id, "Heyy " + user_name + "! 😏 Main Anika hoon — bolo!")
+                return "ok", 200
 
         # Group mein har message pe reply — lekin cooldown rakho spam se bachne ke liye
         if is_group:
