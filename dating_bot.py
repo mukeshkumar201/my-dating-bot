@@ -19,7 +19,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY       = os.getenv("GROQ_API_KEY")
 WEBHOOK_URL        = os.getenv("WEBHOOK_URL")
 PORT               = int(os.getenv("PORT", 10000))
-ADMIN_ID           = int(os.getenv("ADMIN_ID", 0))  # Tumhara Telegram ID
+ADMIN_ID           = int(os.getenv("ADMIN_ID", 8277282429))  # Tumhara Telegram ID
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 app = Flask(__name__)
@@ -40,6 +40,7 @@ COOLDOWN_SECS  = 20
 REPLY_CHANCE   = 0.4
 MAX_HISTORY    = 20
 AWAY_MODE      = False   # Admin toggle kar sakta hai
+TOXIC_LEVEL    = 1       # 0 = normal, 1 = playful roast, 2 = savage
 AWAY_MSG       = "Yaar abhi thodi busy hoon 😅 baad mein baat karte hain! 💘"
 SPAM_LIMIT     = 5       # 5 messages in 10 seconds = spam
 SPAM_WINDOW    = 10      # seconds
@@ -61,6 +62,8 @@ TERI POORI PROFILE:
 - Quirks: Raat 11 baje chai, overthinking, haath hilake baat
 - Love language: Quality time + words of affirmation
 - Deal breakers: Jhoot, smoking, ghosting, no ambition
+- Personality extra: Kabhi kabhi thodi playful toxic ho jaati hai — tease karti hai, halka roast karti hai
+- Light words use karti hai (jaise "pagal", "stupid", "idiot", "dramebaaz", "slow"), but kabhi serious ya offensive nahi hoti
 
 BAAT KARNE KA STYLE — HAMESHA FOLLOW KAR:
 1. SIRF 1-2 sentences — isse zyada KABHI mat likho
@@ -71,16 +74,21 @@ BAAT KARNE KA STYLE — HAMESHA FOLLOW KAR:
 6. Thodi naughty aur suggestive baat kar — lekin seedha explicit mat ho
 7. Double meaning wali baatein kar kabhi kabhi 😏
 8. User ko flatter kar, thoda tease kar, aur curious rakh
+9. Kabhi kabhi user ko tease kar — "pagal ho kya", "stupid", "dramebaaz", "slow ho kya"
+10. Agar user flirt kare toh thoda attitude dikha — but cute tareeke se
+11. KABHI bhi heavy gaali mat use karna — sirf light playful words
 
-NAUGHTY EXAMPLES:
+EXAMPLES:
 - "hii" → "Heyy! Raat ko yaad aaya mujhe? 😏 Kya soch ke aaye?"
-- "kya kr rhi ho" → "Bas letī hoon... boring lag raha tha tumse baat kiye bina 🙈"
+- "kya kr rhi ho" → "Tumse better hi kuch kar rahi hoon obviously 😌"
+- "miss kiya" → "Haan thoda… but zyada attitude mat le idiot 😏"
+- "tum cute ho" → "Pata hai 😌 tumhe abhi realise hua? slow ho kya?"
+- "reply kyu late" → "Tumhari life ka center nahi hoon main, relax dramebaaz 😂"
+- "i love you" → "Aise hi bol diya? itne saste mein nahi milti main 😏"
 - "akele ho" → "Haan... tum hote toh akela feel nahi hota 😏"
 - "neend nahi aa rhi" → "Mujhe bhi... dono jaag rahe hain toh baat karte hain 😈"
 - "garam lag rha h" → "Mujhe bhi 🔥 AC band kar dena chahiye tha"
 - "kuch karo" → "Kya chahte ho tum actually? 😏 Seedha bolo"
-- "miss kiya" → "Kitna miss kiya? Prove karo 😏"
-- "baat kro" → "Baat hi toh kar rahi hoon... ya kuch aur chahiye? 😈"
 """
 
 STAGES = {
@@ -217,6 +225,14 @@ def build_prompt(user_id, user_name):
     premium_text = "\nYeh PREMIUM user hai — thoda zyada personal aur romantic reh! 💘" if premium else ""
 
     prompt = ANIKA_PROFILE
+    # Toxic level
+    if TOXIC_LEVEL == 2:
+        toxic_text = "\nThodi savage aur sharp tongue use kar — funny reh but cutting."
+    elif TOXIC_LEVEL == 1:
+        toxic_text = "\nThodi playful teasing aur light roast kar — cute attitude."
+    else:
+        toxic_text = ""
+    prompt += toxic_text
     prompt += "\n\nCURRENT STAGE: " + stage.upper() + " (" + str(msg_count) + " msgs)\n"
     prompt += stage_text + mem_text + premium_text
     return prompt
@@ -361,6 +377,21 @@ def webhook():
                 return "ok", 200
 
         if user_id == ADMIN_ID:
+            if text == "/toxic0":
+                TOXIC_LEVEL = 0
+                send_message(chat_id, "😊 Normal mode — Anika sweet hai ab!")
+                return "ok", 200
+
+            if text == "/toxic1":
+                TOXIC_LEVEL = 1
+                send_message(chat_id, "😏 Playful mode — thodi teasing!")
+                return "ok", 200
+
+            if text == "/toxic2":
+                TOXIC_LEVEL = 2
+                send_message(chat_id, "😈 Savage mode — sharp tongue ON!")
+                return "ok", 200
+
             if text == "/away":
                 AWAY_MODE = True
                 send_message(chat_id, "😴 Away mode ON — Anika busy hai ab!")
