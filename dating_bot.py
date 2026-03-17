@@ -42,7 +42,7 @@ MAX_HISTORY    = 20
 AWAY_MODE      = False   # Admin toggle kar sakta hai
 TOXIC_LEVEL    = 1       # 0 = normal, 1 = playful roast, 2 = savage
 AWAY_MSG       = "Yaar abhi thodi busy hoon 😅 baad mein baat karte hain! 💘"
-SPAM_LIMIT     = 5       # 5 messages in 10 seconds = spam
+SPAM_LIMIT     = 2       # 5 messages in 10 seconds = spam
 SPAM_WINDOW    = 10      # seconds
 PREMIUM_STARS  = 50      # Stars needed for premium
 
@@ -285,26 +285,58 @@ def get_groq_reply(user_id, user_name, user_message):
 
 
 # ─── Smart Group Reply ──────────────────────────────────────────
-def should_reply_group(chat_id, text):
+# Group message counter — har 2-3 messages ke baad reply
+group_msg_counter = {}  # {chat_id: count}
+
+def should_reply_group(chat_id, text, bot_username=""):
     text_lower = text.lower()
+
+    # Rule 1: Apna naam liya — ZAROOR reply
     for name in ANIKA_NAMES:
         if name in text_lower:
+            group_msg_counter[chat_id] = 0
             return True
-    if "?" in text or any(w in text_lower for w in ["kya", "kaisa", "kahan", "kyun", "kab", "batao", "bolo"]):
+
+    # Rule 2: Directly tag kiya — ZAROOR reply
+    if bot_username and "@" + bot_username.lower() in text_lower:
+        group_msg_counter[chat_id] = 0
+        return True
+
+    # Rule 3: Romantic/flirty word — reply karo
+    romantic_words = ["love", "pyaar", "cute", "hot", "sexy", "beautiful",
+                     "miss", "kiss", "hug", "date", "milna", "single",
+                     "flirt", "dil", "mohabbat", "ishq", "pasand"]
+    for word in romantic_words:
+        if word in text_lower:
+            last = group_last_reply.get(chat_id, 0)
+            if time.time() - last < COOLDOWN_SECS:
+                # Count karo message
+                group_msg_counter[chat_id] = group_msg_counter.get(chat_id, 0) + 1
+                return False
+            group_msg_counter[chat_id] = 0
+            return True
+
+    # Rule 4: Har 2-3 messages ke baad ek reply
+    count = group_msg_counter.get(chat_id, 0) + 1
+    group_msg_counter[chat_id] = count
+
+    if count >= random.randint(2, 3):
         last = group_last_reply.get(chat_id, 0)
         if time.time() - last < COOLDOWN_SECS:
             return False
+        group_msg_counter[chat_id] = 0
         return True
-    for kw in INTERESTING_KEYWORDS:
-        if kw in text_lower:
-            last = group_last_reply.get(chat_id, 0)
-            if time.time() - last < COOLDOWN_SECS:
-                return False
-            return True
+
+    # Rule 5: 50% random chance baaki messages pe
     last = group_last_reply.get(chat_id, 0)
     if time.time() - last < COOLDOWN_SECS:
         return False
-    return random.random() < REPLY_CHANCE
+
+    if random.random() < REPLY_CHANCE:
+        group_msg_counter[chat_id] = 0
+        return True
+
+    return False
 
 
 # ─── Webhook ───────────────────────────────────────────────────
