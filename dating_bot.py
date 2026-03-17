@@ -360,6 +360,7 @@ def webhook():
             return "ok", 200
 
         # ── Admin Commands ──
+        logger.info("User ID: " + str(user_id) + " | ADMIN_ID: " + str(ADMIN_ID) + " | Match: " + str(user_id == ADMIN_ID))
         if text == "/stats":
                 premium_count = len(stars_payments)
                 msg = ("📊 *Anika Stats*\n\n"
