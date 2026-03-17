@@ -2,3 +2,4 @@ flask
 requests
 groq
 python-dotenv
+libsql-experimental
