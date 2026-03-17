@@ -47,61 +47,30 @@ PROACTIVE_MSGS = [
 
 TELEGRAM_API = "https://api.telegram.org/bot" + TELEGRAM_BOT_TOKEN
 
-# ─── Turso HTTP API ────────────────────────────────────────────
-TURSO_HTTP = TURSO_URL.replace("libsql://", "https://")
-
-def turso_execute(sql, args=None):
-    payload = {"statements": [{"q": sql, "params": args or []}]}
-    try:
-        r = requests.post(
-            TURSO_HTTP + "/v2/pipeline",
-            headers={"Authorization": "Bearer " + TURSO_TOKEN, "Content-Type": "application/json"},
-            json={"requests": [{"type": "execute", "stmt": {"sql": sql, "args": [{"type": "text", "value": str(a)} if isinstance(a, str) else {"type": "integer", "value": a} for a in (args or [])]}}]},
-            timeout=10
-        )
-        return r.json()
-    except Exception as e:
-        logger.error("Turso: " + str(e))
-        return None
+# ─── SQLite Database ───────────────────────────────────────────
+import sqlite3
+DB_PATH = "/tmp/anika.db"
 
 def turso_query(sql, args=None):
+    """SQLite wrapper — same interface as Turso"""
     try:
-        body = {
-            "requests": [{
-                "type": "execute",
-                "stmt": {
-                    "sql": sql,
-                    "args": []
-                }
-            }]
-        }
-        if args:
-            body["requests"][0]["stmt"]["args"] = [
-                {"type": "text", "value": str(a)} if isinstance(a, str) else
-                {"type": "integer", "value": int(a)} for a in args
-            ]
-        r = requests.post(
-            TURSO_HTTP + "/v2/pipeline",
-            headers={"Authorization": "Bearer " + TURSO_TOKEN, "Content-Type": "application/json"},
-            json=body,
-            timeout=10
-        )
-        data = r.json()
-        results = data.get("results", [])
-        if results and results[0].get("type") == "ok":
-            rows_data = results[0].get("response", {}).get("result", {})
-            cols = [c["name"] for c in rows_data.get("cols", [])]
-            rows = []
-            for row in rows_data.get("rows", []):
-                rows.append({cols[i]: (v.get("value") if v.get("type") != "null" else None) for i, v in enumerate(row)})
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute(sql, args or [])
+        if sql.strip().upper().startswith("SELECT"):
+            rows = [dict(r) for r in c.fetchall()]
+            conn.close()
             return rows
+        conn.commit()
+        conn.close()
         return []
     except Exception as e:
-        logger.error("Turso query: " + str(e))
+        logger.error("DB error: " + str(e))
         return []
 
 def init_db():
-    sql = """CREATE TABLE IF NOT EXISTS users (
+    turso_query("""CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         name TEXT,
         msg_count INTEGER DEFAULT 0,
@@ -109,9 +78,8 @@ def init_db():
         city TEXT DEFAULT '',
         history TEXT DEFAULT '[]',
         created_at INTEGER
-    )"""
-    turso_query(sql)
-    logger.info("Turso DB initialized!")
+    )""")
+    logger.info("SQLite DB initialized!")
 
 def get_user(user_id, user_name):
     rows = turso_query("SELECT * FROM users WHERE user_id = ?", [user_id])
